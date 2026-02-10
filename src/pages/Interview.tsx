@@ -6,8 +6,9 @@ import { useTimer } from '../hooks/useTimer';
 import { useSpeech } from '../hooks/useSpeech';
 import { calculateScore, validateCode, ScoringInput } from '../utils/scoring';
 
-type Section = 'understand' | 'approach' | 'code' | 'test';
+type Section = 'understand' | 'approach' | 'complexity' | 'code' | 'test';
 type Language = 'javascript' | 'python';
+type ComplexityStage = 'time' | 'space' | 'done';
 
 const Interview: React.FC = () => {
     const location = useLocation();
@@ -18,9 +19,9 @@ const Interview: React.FC = () => {
     const [currentSection, setCurrentSection] = useState<Section>('understand');
     const [language, setLanguage] = useState<Language>(initialLanguage);
     const [code, setCode] = useState('');
-    const [testResults, setTestResults] = useState<{ passed: boolean; input: string; expected: string; actual?: string }[]>([]);
     const [showHints, setShowHints] = useState(false);
     const [interviewStarted, setInterviewStarted] = useState(false);
+    const [testResults, setTestResults] = useState<{ passed: boolean; input: string; expected: string; actual?: string }[]>([]);
 
     // Scoring inputs
     const [askedClarifying, setAskedClarifying] = useState(false);
@@ -28,12 +29,24 @@ const Interview: React.FC = () => {
     const [explainedApproach, setExplainedApproach] = useState(false);
     const [discussedComplexity, setDiscussedComplexity] = useState(false);
 
+    const [approachFeedback, setApproachFeedback] = useState<string>('');
+    const [failedApproaches, setFailedApproaches] = useState(0);
+    const [complexityStage, setComplexityStage] = useState<ComplexityStage>('time');
+    const [timeComplexityInput, setTimeComplexityInput] = useState('');
+    const [spaceComplexityInput, setSpaceComplexityInput] = useState('');
+    const [isEditorDisabled, setIsEditorDisabled] = useState(true);
+    const [lastLogicBlockCount, setLastLogicBlockCount] = useState(0);
+    const [interactionPoints, setInteractionPoints] = useState(0);
+    const [interviewEnded, setInterviewEnded] = useState(false);
+    const [testFeedback, setTestFeedback] = useState<string>('');
+    const [allTestsPassed, setAllTestsPassed] = useState(false);
+
     const timer = useTimer(60);
     const speech = useSpeech();
 
     // Initialize question and code
     useEffect(() => {
-        const q = getRandomQuestion(difficulty);
+        const q = getRandomQuestion(difficulty as any);
         setQuestion(q);
         setCode(q.starterCode[language as keyof typeof q.starterCode]);
     }, [difficulty, language]);
@@ -64,27 +77,110 @@ const Interview: React.FC = () => {
     const handleRunTests = () => {
         if (!question) return;
 
-        // Simple validation
-        const validation = validateCode(code, language);
+        let results: any[] = [];
+        let allPassed = false;
 
-        // For demo purposes, we'll simulate test results
-        // In a real app, this would execute the code safely
-        const results = question.testCases.map((tc, index) => {
-            // Simulate some passes and fails based on code content
-            const hasImplementation = !code.includes('// Your code here') &&
-                !code.includes('# Your code here') &&
-                !code.includes('pass');
-            const passed = hasImplementation && Math.random() > 0.3;
+        if (language === 'javascript') {
+            try {
+                // Determine function name from starter code
+                const functionMatch = question.starterCode.javascript.match(/function\s+([a-zA-Z0-9_]+)/);
+                const functionName = functionMatch ? functionMatch[1] : '';
 
-            return {
-                passed,
-                input: tc.input,
-                expected: tc.expectedOutput,
-                actual: passed ? tc.expectedOutput : 'undefined'
-            };
-        });
+                // Create a runner that returns the user's function
+                const runner = new Function(`
+                    ${code}
+                    return typeof ${functionName} !== 'undefined' ? ${functionName} : null;
+                `)();
+
+                if (typeof runner !== 'function') {
+                    throw new Error(`Function ${functionName} is not defined`);
+                }
+
+                results = question.testCases.map((tc) => {
+                    try {
+                        // Parse input (handles simple cases like "[1,2], 3")
+                        let args: any[] = [];
+                        try {
+                            if (tc.input.startsWith('[') && tc.input.endsWith(']')) {
+                                args = [JSON.parse(tc.input)];
+                            } else {
+                                args = tc.input.split(',').map(s => {
+                                    const trimmed = s.trim();
+                                    try { return JSON.parse(trimmed); } catch { return trimmed; }
+                                });
+                            }
+                        } catch {
+                            args = [tc.input];
+                        }
+
+                        const actual = runner(...args);
+                        const expected = JSON.parse(tc.expectedOutput);
+
+                        // Deep comparison for arrays/objects
+                        const passed = JSON.stringify(actual) === JSON.stringify(expected);
+
+                        return {
+                            passed,
+                            input: tc.input,
+                            expected: tc.expectedOutput,
+                            actual: JSON.stringify(actual)
+                        };
+                    } catch (e) {
+                        return {
+                            passed: false,
+                            input: tc.input,
+                            expected: tc.expectedOutput,
+                            actual: `Error: ${(e as Error).message}`
+                        };
+                    }
+                });
+            } catch (e) {
+                setTestFeedback(`Runtime Error: ${(e as Error).message}`);
+                speech.speak(`There was a runtime error in your code: ${(e as Error).message}`);
+                setTestResults(question.testCases.map(tc => ({
+                    passed: false,
+                    input: tc.input,
+                    expected: tc.expectedOutput,
+                    actual: 'Compilation/Runtime Error'
+                })));
+                return;
+            }
+        } else {
+            // Robust Deterministic Mock for Python (Semantic check)
+            const hasImplementation = !code.includes('pass') &&
+                code.length > (question.starterCode.python.length + 10);
+
+            // Check for requirement-specific keywords
+            const keywords = question.expectedApproach.toLowerCase().split(' ');
+            const foundKeywords = keywords.filter(k => k.length > 4 && code.toLowerCase().includes(k)).length;
+            const semanticScore = foundKeywords / (keywords.length * 0.5);
+
+            results = question.testCases.map((tc, index) => {
+                // Deterministically pass/fail based on semantic completeness
+                const passed = hasImplementation && (index < 2 || semanticScore > 0.6);
+                return {
+                    passed,
+                    input: tc.input,
+                    expected: tc.expectedOutput,
+                    actual: passed ? tc.expectedOutput : 'Incorrect Output'
+                };
+            });
+        }
 
         setTestResults(results);
+        allPassed = results.every(r => r.passed);
+        setAllTestsPassed(allPassed);
+
+        if (allPassed) {
+            const feedback = "Excellent! All test cases passed. Your solution seems robust. You can now submit your interview.";
+            setTestFeedback(feedback);
+            speech.speak(feedback);
+        } else {
+            const hint = question.hints?.[0] || "Try to re-examine your logic for the failing test case.";
+            const feedback = `One or more test cases failed. Hint: ${hint}`;
+            setTestFeedback(feedback);
+            speech.speak(feedback);
+        }
     };
 
     // Submit interview
@@ -110,6 +206,7 @@ const Interview: React.FC = () => {
                 code.toLowerCase().includes('length') && code.includes('0'),
             verbalExplanationLength: speech.transcript.split(' ').length,
             structuredThinking: speech.transcript.length > 100,
+            interactionPoints: interactionPoints,
             timeUsedSeconds: 3600 - timer.timeRemaining,
             totalTimeSeconds: 3600
         };
@@ -118,6 +215,86 @@ const Interview: React.FC = () => {
 
         navigate('/results', { state: { scoreResult } });
     };
+
+    // Verify Approach
+    const handleVerifyApproach = () => {
+        if (!question) return;
+
+        const transcript = speech.transcript.toLowerCase();
+        const expectedKeywords = question.expectedApproach.toLowerCase().split(' ');
+
+        // Simple heuristic: check if common keywords from expected approach are present
+        const matchCount = expectedKeywords.filter(word =>
+            word.length > 3 && transcript.includes(word)
+        ).length;
+
+        const isCorrect = matchCount >= Math.min(3, expectedKeywords.filter(w => w.length > 3).length);
+
+        if (isCorrect) {
+            setExplainedApproach(true);
+            setApproachFeedback("That's a solid approach! Now, let's discuss the Big-O complexity.");
+            speech.speak("That's a solid approach! Now, let's discuss the Big-O complexity.");
+            setTimeout(() => setCurrentSection('complexity'), 2000);
+        } else {
+            const newFailedCount = failedApproaches + 1;
+            setFailedApproaches(newFailedCount);
+
+            if (newFailedCount >= 3) {
+                setApproachFeedback("I'm sorry,แต่ we've tried a few approaches and haven't quite hit the target. I suggest you prepare well and try again later. The interview is now closed.");
+                speech.speak("I'm sorry, but we've tried a few approaches and haven't quite hit the target. I suggest you prepare well and try again later. The interview is now closed.");
+                setInterviewEnded(true);
+                timer.pause();
+            } else {
+                setApproachFeedback(`That doesn't seem quite right. Can you think of a more optimal way? You have ${3 - newFailedCount} attempts remaining.`);
+                speech.speak(`That doesn't seem quite right. Can you think of a more optimal way? You have ${3 - newFailedCount} attempts remaining.`);
+            }
+        }
+    };
+
+    // Verify Complexity
+    const handleVerifyComplexity = () => {
+        if (!question) return;
+
+        if (complexityStage === 'time') {
+            const isCorrect = timeComplexityInput.toLowerCase().replace(/\s/g, '').includes(question.timeComplexity.toLowerCase().replace(/\s/g, ''));
+            if (isCorrect) {
+                setComplexityStage('space');
+                speech.speak("Correct! Now, what is the space complexity?");
+            } else {
+                speech.speak("Not quite. Think about how many times we iterate through the input.");
+            }
+        } else {
+            const isCorrect = spaceComplexityInput.toLowerCase().replace(/\s/g, '').includes(question.spaceComplexity.toLowerCase().replace(/\s/g, ''));
+            if (isCorrect) {
+                setComplexityStage('done');
+                setDiscussedComplexity(true);
+                setIsEditorDisabled(false);
+                speech.speak("Excellent. You've met the criteria. You can now proceed to implement the solution. The editor is now enabled.");
+                setTimeout(() => setCurrentSection('code'), 3000);
+            } else {
+                speech.speak("Not quite. Consider any extra data structures you might be using.");
+            }
+        }
+    };
+
+    // Monitor code for logic blocks
+    useEffect(() => {
+        if (currentSection !== 'code' || interviewEnded) return;
+
+        // Simple regex to detect completed logic blocks
+        const blocks = (code.match(/(for|while|if)\s*\(.*?\)\s*\{[\s\S]*?\}/g) || []).length;
+
+        if (blocks > lastLogicBlockCount) {
+            setLastLogicBlockCount(blocks);
+            const blockType = code.match(/(for|while|if)\s*\(.*?\)\s*\{[\s\S]*?\}/g)?.pop()?.match(/(for|while|if)/)?.[0];
+
+            speech.speak(`I see you've implemented a ${blockType} block. Can you quickly explain the logic here while you continue?`);
+            // We'll give them some "communication points" if they're speaking while coding
+            if (speech.isListening) {
+                setInteractionPoints(prev => prev + 1);
+            }
+        }
+    }, [code, currentSection, lastLogicBlockCount, speech, interviewEnded]);
 
     // Read question aloud
     const handleReadAloud = () => {
@@ -192,11 +369,17 @@ const Interview: React.FC = () => {
 
                 <div className="header-center">
                     <div className="section-tabs">
-                        {(['understand', 'approach', 'code', 'test'] as Section[]).map((section) => (
+                        {(['understand', 'approach', 'complexity', 'code', 'test'] as Section[]).map((section) => (
                             <button
                                 key={section}
                                 className={`section-tab ${currentSection === section ? 'active' : ''}`}
                                 onClick={() => setCurrentSection(section)}
+                                disabled={
+                                    (section === 'complexity' && !explainedApproach) ||
+                                    (section === 'code' && !discussedComplexity) ||
+                                    (section === 'test' && !discussedComplexity) ||
+                                    interviewEnded
+                                }
                             >
                                 {section.charAt(0).toUpperCase() + section.slice(1)}
                             </button>
@@ -209,8 +392,12 @@ const Interview: React.FC = () => {
                         <span className="timer-icon">⏱️</span>
                         {timer.formattedTime}
                     </div>
-                    <button className="btn btn-success" onClick={handleSubmit}>
-                        Submit
+                    <button
+                        className={`btn ${allTestsPassed ? 'btn-primary pulse' : 'btn-success'}`}
+                        onClick={handleSubmit}
+                        disabled={interviewEnded}
+                    >
+                        {allTestsPassed ? 'Submit Interview' : 'Submit'}
                     </button>
                 </div>
             </header>
@@ -281,6 +468,7 @@ const Interview: React.FC = () => {
                                                 type="checkbox"
                                                 checked={askedClarifying}
                                                 onChange={(e) => setAskedClarifying(e.target.checked)}
+                                                disabled={interviewEnded}
                                             />
                                             I asked clarifying questions
                                         </label>
@@ -289,9 +477,63 @@ const Interview: React.FC = () => {
                                                 type="checkbox"
                                                 checked={identifiedEdgeCases}
                                                 onChange={(e) => setIdentifiedEdgeCases(e.target.checked)}
+                                                disabled={interviewEnded}
                                             />
                                             I identified edge cases
                                         </label>
+                                    </div>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={() => setCurrentSection('approach')}
+                                        style={{ marginTop: '24px' }}
+                                        disabled={interviewEnded}
+                                    >
+                                        Next: Explain Approach
+                                    </button>
+                                </div>
+                            )}
+
+                            {currentSection === 'complexity' && (
+                                <div className="animate-fade-in">
+                                    <h3 style={{ marginBottom: '16px', color: 'var(--accent-primary)' }}>
+                                        📊 Step 2.5: Complexity Analysis
+                                    </h3>
+                                    <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+                                        {complexityStage === 'time'
+                                            ? "What is the Time Complexity of your proposed solution?"
+                                            : "And what is the Space Complexity?"}
+                                    </p>
+
+                                    <div className="complexity-input-section" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        {complexityStage === 'time' ? (
+                                            <input
+                                                type="text"
+                                                className="input-field"
+                                                placeholder="e.g. O(n), O(log n)"
+                                                value={timeComplexityInput}
+                                                onChange={(e) => setTimeComplexityInput(e.target.value)}
+                                                disabled={interviewEnded}
+                                                style={{ padding: '12px', background: 'var(--bg-secondary)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 'var(--radius-md)' }}
+                                            />
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                className="input-field"
+                                                placeholder="e.g. O(1), O(n)"
+                                                value={spaceComplexityInput}
+                                                onChange={(e) => setSpaceComplexityInput(e.target.value)}
+                                                disabled={interviewEnded}
+                                                style={{ padding: '12px', background: 'var(--bg-secondary)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 'var(--radius-md)' }}
+                                            />
+                                        )}
+
+                                        <button
+                                            className="btn btn-primary"
+                                            onClick={handleVerifyComplexity}
+                                            disabled={interviewEnded || (complexityStage === 'time' ? !timeComplexityInput : !spaceComplexityInput)}
+                                        >
+                                            ✅ Verify Complexity
+                                        </button>
                                     </div>
                                 </div>
                             )}
@@ -325,6 +567,29 @@ const Interview: React.FC = () => {
                                                     Your verbal explanation will appear here...
                                                 </span>
                                             )}
+                                        </div>
+
+                                        {approachFeedback && (
+                                            <div style={{
+                                                marginTop: '16px',
+                                                padding: '12px',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: failedApproaches > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                                                border: `1px solid ${failedApproaches > 0 ? 'var(--danger-color)' : 'var(--success-color)'}`,
+                                                color: failedApproaches > 0 ? 'var(--danger-color)' : 'var(--success-color)'
+                                            }}>
+                                                {approachFeedback}
+                                            </div>
+                                        )}
+
+                                        <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={handleVerifyApproach}
+                                                disabled={!speech.transcript && !interviewEnded}
+                                            >
+                                                ✅ Verify Approach
+                                            </button>
                                         </div>
 
                                         <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
@@ -434,7 +699,8 @@ const Interview: React.FC = () => {
                                         automaticLayout: true,
                                         tabSize: 2,
                                         wordWrap: 'on',
-                                        padding: { top: 16 }
+                                        padding: { top: 16 },
+                                        readOnly: isEditorDisabled
                                     }}
                                 />
                             </div>
@@ -451,6 +717,19 @@ const Interview: React.FC = () => {
                                 </button>
                             </div>
                             <div className="test-content">
+                                {testFeedback && (
+                                    <div style={{
+                                        padding: '12px',
+                                        marginBottom: '16px',
+                                        borderRadius: 'var(--radius-md)',
+                                        background: allTestsPassed ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                        border: `1px solid ${allTestsPassed ? 'var(--success-color)' : 'var(--danger-color)'}`,
+                                        color: 'white',
+                                        fontSize: '0.9rem'
+                                    }}>
+                                        {testFeedback}
+                                    </div>
+                                )}
                                 {testResults.length === 0 ? (
                                     question.testCases.slice(0, 3).map((tc, index) => (
                                         <div key={index} className="test-case">

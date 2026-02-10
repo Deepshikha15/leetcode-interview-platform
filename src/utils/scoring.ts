@@ -38,6 +38,7 @@ export interface ScoringInput {
     // Communication
     verbalExplanationLength: number; // words
     structuredThinking: boolean;
+    interactionPoints: number; // points for explaining while coding
 
     // Time
     timeUsedSeconds: number;
@@ -176,6 +177,14 @@ export function calculateScore(input: ScoringInput): ScoreResult {
         maxScore: 15,
         comments: commComments
     });
+
+    // Interactive Feedback (added to communication)
+    if (input.interactionPoints > 0) {
+        communication += Math.min(input.interactionPoints * 2, 10);
+        commComments.push(`✓ Explained logic while coding (${input.interactionPoints} times)`);
+    } else {
+        commComments.push('✗ Could improve by explaining logic blocks while coding');
+    }
 
     // Time Management (10 points)
     let timeManagement = 0;
