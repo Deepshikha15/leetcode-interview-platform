@@ -59,7 +59,7 @@ const Interview: React.FC = () => {
         // Read the question aloud
         if (question && speech.isSpeechSupported) {
             const introText = `Welcome to your coding interview. Today's question is: ${question.title}. 
-        This is a ${question.difficulty} level ${question.category} problem. 
+        This is a ${question.difficulty} level problem. 
         ${question.description}`;
             speech.speak(introText);
         }
@@ -98,17 +98,10 @@ const Interview: React.FC = () => {
 
                 results = question.testCases.map((tc) => {
                     try {
-                        // Parse input (handles simple cases like "[1,2], 3")
+                        // Parse input as a JSON array of arguments
                         let args: any[] = [];
                         try {
-                            if (tc.input.startsWith('[') && tc.input.endsWith(']')) {
-                                args = [JSON.parse(tc.input)];
-                            } else {
-                                args = tc.input.split(',').map(s => {
-                                    const trimmed = s.trim();
-                                    try { return JSON.parse(trimmed); } catch { return trimmed; }
-                                });
-                            }
+                            args = JSON.parse("[" + tc.input + "]");
                         } catch {
                             args = [tc.input];
                         }
@@ -223,12 +216,21 @@ const Interview: React.FC = () => {
         const transcript = speech.transcript.toLowerCase();
         const expectedKeywords = question.expectedApproach.toLowerCase().split(' ');
 
-        // Simple heuristic: check if common keywords from expected approach are present
-        const matchCount = expectedKeywords.filter(word =>
-            word.length > 3 && transcript.includes(word)
-        ).length;
+        let matchedKeywords = 0;
 
-        const isCorrect = matchCount >= Math.min(3, expectedKeywords.filter(w => w.length > 3).length);
+        // Check keywords from expected approach
+        const importantKeywords = expectedKeywords.filter(k => k.length > 3);
+        importantKeywords.forEach(word => {
+            if (transcript.includes(word)) matchedKeywords++;
+        });
+
+        // Also check and accept category keywords (hidden from user)
+        const categoryKeywords = question.category.toLowerCase().split(/[ &/,]+/).filter(k => k.length > 3);
+        categoryKeywords.forEach(word => {
+            if (transcript.includes(word)) matchedKeywords++;
+        });
+
+        const isCorrect = matchedKeywords >= Math.min(3, importantKeywords.length);
 
         if (isCorrect) {
             setExplainedApproach(true);
@@ -345,10 +347,6 @@ const Interview: React.FC = () => {
                                 {question.difficulty}
                             </span>
                         </div>
-                        <div>
-                            <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Category</div>
-                            <div style={{ fontSize: '18px', fontWeight: '600' }}>{question.category}</div>
-                        </div>
                     </div>
                 </div>
                 <button className="start-btn" onClick={handleStartInterview}>
@@ -414,9 +412,6 @@ const Interview: React.FC = () => {
                                     <div className="question-meta">
                                         <span className={`badge badge-${question.difficulty.toLowerCase()}`}>
                                             {question.difficulty}
-                                        </span>
-                                        <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-                                            {question.category}
                                         </span>
                                     </div>
                                 </div>
