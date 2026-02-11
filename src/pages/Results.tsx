@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ScoreResult } from '../utils/scoring';
+import { useAuth } from '../context/AuthContext';
 
 type Difficulty = 'Easy' | 'Medium' | 'Hard';
 type Language = 'javascript' | 'python';
@@ -54,10 +55,16 @@ const getLearningSummary = (scoreOutOf5: number): string => {
 const Results: React.FC = () => {
     const location = useLocation();
     const navigate = useNavigate();
+    const { logout } = useAuth();
     const routeState = (location.state ?? {}) as ResultsRouteState;
     const scoreResult = routeState.scoreResult;
     const [showLearningSelection, setShowLearningSelection] = useState(false);
     const [selectedJourney, setSelectedJourney] = useState<LearningPath | null>(null);
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login', { replace: true });
+    };
 
     if (!scoreResult) {
         return (
@@ -66,9 +73,14 @@ const Results: React.FC = () => {
                 <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
                     Complete an interview to see your results.
                 </p>
-                <button className="btn btn-primary btn-large" onClick={() => navigate('/')}>
-                    Start Interview
-                </button>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button className="btn btn-primary btn-large" onClick={() => navigate('/')}>
+                        Start Interview
+                    </button>
+                    <button className="btn btn-secondary btn-large" onClick={handleLogout}>
+                        Logout
+                    </button>
+                </div>
             </div>
         );
     }
@@ -299,6 +311,9 @@ const Results: React.FC = () => {
             )}
 
             <div className="results-actions">
+                <button className="btn btn-secondary btn-large" onClick={handleLogout}>
+                    Logout
+                </button>
                 <button className="btn btn-secondary btn-large" onClick={() => navigate('/')}>
                     🏠 Back Home
                 </button>

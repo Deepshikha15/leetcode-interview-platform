@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 type Difficulty = 'Easy' | 'Medium' | 'Hard';
 type Language = 'javascript' | 'python';
 
 const Home: React.FC = () => {
     const navigate = useNavigate();
+    const { user, logout, headcount } = useAuth();
     const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>('Medium');
     const [selectedLanguage, setSelectedLanguage] = useState<Language>('javascript');
 
@@ -29,8 +31,19 @@ const Home: React.FC = () => {
         });
     };
 
+    const handleLogout = () => {
+        logout();
+        navigate('/login', { replace: true });
+    };
+
     return (
         <div className="home-container">
+            <div className="home-top-bar">
+                <span className="home-user-email">{user?.email}</span>
+                <button className="btn btn-secondary" onClick={handleLogout}>
+                    Logout
+                </button>
+            </div>
             <div className="home-logo">💻</div>
             <h1 className="home-title">
                 <span className="gradient-text">LeetCode Interview Pro</span>
@@ -88,8 +101,8 @@ const Home: React.FC = () => {
                     <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Interview Duration</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-primary)' }}>5</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scoring Categories</div>
+                    <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-primary)' }}>{headcount}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Total Users</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-primary)' }}>🎤</div>
