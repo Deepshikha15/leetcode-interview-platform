@@ -19,7 +19,7 @@ export function useTimer(initialMinutes: number = 60): UseTimerReturn {
     const [timeRemaining, setTimeRemaining] = useState(initialSeconds);
     const [isRunning, setIsRunning] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const clearTimer = useCallback(() => {
         if (intervalRef.current) {

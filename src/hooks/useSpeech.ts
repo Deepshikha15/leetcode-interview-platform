@@ -39,7 +39,7 @@ export function useSpeech(): UseSpeechReturn {
             recognitionRef.current.interimResults = true;
             recognitionRef.current.lang = 'en-US';
 
-            recognitionRef.current.onresult = (event) => {
+            recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
                 let finalTranscript = '';
                 let interimTranscript = '';
 
@@ -55,7 +55,7 @@ export function useSpeech(): UseSpeechReturn {
                 setTranscript(prev => prev + finalTranscript);
             };
 
-            recognitionRef.current.onerror = (event) => {
+            recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
                 console.error('Speech recognition error:', event.error);
                 setIsListening(false);
             };
@@ -150,9 +150,54 @@ export function useSpeech(): UseSpeechReturn {
 }
 
 // Type declarations for Web Speech API
+interface SpeechRecognitionErrorEvent extends Event {
+    error: string;
+    message: string;
+}
+
+interface SpeechRecognitionEvent extends Event {
+    resultIndex: number;
+    results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionResultList {
+    length: number;
+    item(index: number): SpeechRecognitionResult;
+    [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+    isFinal: boolean;
+    length: number;
+    item(index: number): SpeechRecognitionAlternative;
+    [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+    transcript: string;
+    confidence: number;
+}
+
+interface SpeechRecognition extends EventTarget {
+    continuous: boolean;
+    interimResults: boolean;
+    lang: string;
+    start(): void;
+    stop(): void;
+    abort(): void;
+    onresult: (event: SpeechRecognitionEvent) => void;
+    onerror: (event: SpeechRecognitionErrorEvent) => void;
+    onend: () => void;
+}
+
+interface SpeechRecognitionConstructor {
+    new(): SpeechRecognition;
+}
+
 declare global {
     interface Window {
-        SpeechRecognition: typeof SpeechRecognition;
-        webkitSpeechRecognition: typeof SpeechRecognition;
+        SpeechRecognition: SpeechRecognitionConstructor;
+        webkitSpeechRecognition: SpeechRecognitionConstructor;
     }
 }
+
