@@ -7,6 +7,7 @@ import Review from './pages/Review';
 import Backlog from './pages/Backlog';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
 import ProtectedRoute from './components/ProtectedRoute';
 import PublicOnlyRoute from './components/PublicOnlyRoute';
 
@@ -26,6 +27,14 @@ const App: React.FC = () => {
                 element={(
                     <PublicOnlyRoute>
                         <Register />
+                    </PublicOnlyRoute>
+                )}
+            />
+            <Route
+                path="/forgot-password"
+                element={(
+                    <PublicOnlyRoute>
+                        <ForgotPassword />
                     </PublicOnlyRoute>
                 )}
             />

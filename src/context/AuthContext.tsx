@@ -22,6 +22,7 @@ interface AuthContextValue {
     headcount: number;
     login: (email: string, password: string) => AuthResult;
     register: (email: string, password: string) => AuthResult;
+    resetPassword: (email: string, newPassword: string) => AuthResult;
     logout: () => void;
 }
 
@@ -33,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 const hasWindow = () => typeof window !== 'undefined';
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const readUsersFromStorage = (): StoredUser[] => {
     if (!hasWindow()) return [];
@@ -142,8 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return { success: false, message: 'Email is required.' };
         }
 
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(normalizedEmail)) {
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
             return { success: false, message: 'Enter a valid email address.' };
         }
 
@@ -179,6 +180,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: true };
     };
 
+    const resetPassword = (email: string, newPassword: string): AuthResult => {
+        const normalizedEmail = normalizeEmail(email);
+        const trimmedPassword = newPassword.trim();
+        const users = readUsersFromStorage();
+
+        if (!normalizedEmail) {
+            return { success: false, message: 'Email is required.' };
+        }
+
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
+            return { success: false, message: 'Enter a valid email address.' };
+        }
+
+        if (trimmedPassword.length < 6) {
+            return { success: false, message: 'Password must be at least 6 characters.' };
+        }
+
+        const userIndex = users.findIndex(existingUser => existingUser.email === normalizedEmail);
+        if (userIndex < 0) {
+            return { success: false, message: 'No account found with this email.' };
+        }
+
+        const updatedUsers = [...users];
+        updatedUsers[userIndex] = {
+            ...updatedUsers[userIndex],
+            password: trimmedPassword
+        };
+        writeUsersToStorage(updatedUsers);
+
+        return { success: true, message: 'Password reset successful.' };
+    };
+
     const logout = (): void => {
         clearSessionEmail();
         setUser(null);
@@ -190,6 +223,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headcount,
         login,
         register,
+        resetPassword,
         logout
     }), [headcount, user]);
 

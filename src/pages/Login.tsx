@@ -57,6 +57,15 @@ const Login: React.FC = () => {
                         autoComplete="current-password"
                         required
                     />
+                    <div className="auth-row-right">
+                        <button
+                            type="button"
+                            className="auth-link-btn"
+                            onClick={() => navigate('/forgot-password')}
+                        >
+                            Forgot password?
+                        </button>
+                    </div>
 
                     {errorMessage && <div className="auth-error">{errorMessage}</div>}
 

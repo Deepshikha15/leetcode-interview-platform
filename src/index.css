@@ -744,6 +744,12 @@ body {
   font-size: 13px;
 }
 
+.auth-success {
+  margin-bottom: var(--spacing-md);
+  color: var(--success);
+  font-size: 13px;
+}
+
 .auth-submit {
   width: 100%;
 }
@@ -762,6 +768,17 @@ body {
   margin-left: var(--spacing-xs);
   font-size: 14px;
   font-weight: 600;
+}
+
+.auth-row-right {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
+  margin-bottom: var(--spacing-sm);
+}
+
+.auth-row-right .auth-link-btn {
+  margin-left: 0;
 }
 
 .home-container {
