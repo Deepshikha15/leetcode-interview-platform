@@ -614,11 +614,22 @@ function coinChange(coins, amount) {
     }
 ];
 
-export function getRandomQuestion(difficulty?: 'Easy' | 'Medium' | 'Hard'): Question {
+export function getRandomQuestion(
+    difficulty?: 'Easy' | 'Medium' | 'Hard',
+    excludeQuestionId?: number
+): Question {
     let filtered = questions;
     if (difficulty) {
         filtered = questions.filter(q => q.difficulty === difficulty);
     }
+
+    if (excludeQuestionId !== undefined && filtered.length > 1) {
+        const withoutPrevious = filtered.filter(q => q.id !== excludeQuestionId);
+        if (withoutPrevious.length > 0) {
+            filtered = withoutPrevious;
+        }
+    }
+
     return filtered[Math.floor(Math.random() * filtered.length)];
 }
 

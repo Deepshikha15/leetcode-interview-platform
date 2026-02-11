@@ -1,19 +1,31 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { questions, Question, getRandomQuestion } from '../data/questions';
+import { Question, getRandomQuestion } from '../data/questions';
 import { useTimer } from '../hooks/useTimer';
 import { useSpeech } from '../hooks/useSpeech';
 import { calculateScore, validateCode, ScoringInput } from '../utils/scoring';
 
 type Section = 'understand' | 'approach' | 'complexity' | 'code' | 'test';
 type Language = 'javascript' | 'python';
+type Difficulty = 'Easy' | 'Medium' | 'Hard';
 type ComplexityStage = 'time' | 'space' | 'done';
+
+interface InterviewRouteState {
+    difficulty?: Difficulty;
+    language?: Language;
+    previousQuestionId?: number;
+}
 
 const Interview: React.FC = () => {
     const location = useLocation();
     const navigate = useNavigate();
-    const { difficulty = 'Medium', language: initialLanguage = 'javascript' } = location.state || {};
+    const routeState = (location.state ?? {}) as InterviewRouteState;
+    const {
+        difficulty = 'Medium',
+        language: initialLanguage = 'javascript',
+        previousQuestionId
+    } = routeState;
 
     const [question, setQuestion] = useState<Question | null>(null);
     const [currentSection, setCurrentSection] = useState<Section>('understand');
@@ -44,12 +56,17 @@ const Interview: React.FC = () => {
     const timer = useTimer(60);
     const speech = useSpeech();
 
-    // Initialize question and code
+    // Initialize question
     useEffect(() => {
-        const q = getRandomQuestion(difficulty as any);
+        const q = getRandomQuestion(difficulty, previousQuestionId);
         setQuestion(q);
-        setCode(q.starterCode[language as keyof typeof q.starterCode]);
-    }, [difficulty, language]);
+    }, [difficulty, previousQuestionId]);
+
+    // Reset editor starter code when question/language changes
+    useEffect(() => {
+        if (!question) return;
+        setCode(question.starterCode[language]);
+    }, [question, language]);
 
     // Start interview
     const handleStartInterview = useCallback(() => {
@@ -68,9 +85,6 @@ const Interview: React.FC = () => {
     // Handle language change
     const handleLanguageChange = (newLang: Language) => {
         setLanguage(newLang);
-        if (question) {
-            setCode(question.starterCode[newLang]);
-        }
     };
 
     // Run tests
@@ -178,10 +192,12 @@ const Interview: React.FC = () => {
 
     // Submit interview
     const handleSubmit = () => {
+        if (!question) return;
+
         timer.pause();
 
         const passedTests = testResults.filter(r => r.passed).length;
-        const totalTests = testResults.length || (question?.testCases.length || 0);
+        const totalTests = testResults.length || question.testCases.length;
 
         const scoringInput: ScoringInput = {
             askedClarifyingQuestions: askedClarifying,
@@ -206,7 +222,17 @@ const Interview: React.FC = () => {
 
         const scoreResult = calculateScore(scoringInput);
 
-        navigate('/results', { state: { scoreResult } });
+        navigate('/results', {
+            state: {
+                scoreResult,
+                problemId: question.id,
+                problemTitle: question.title,
+                difficulty: question.difficulty,
+                language,
+                passedTests,
+                totalTests
+            }
+        });
     };
 
     // Verify Approach
