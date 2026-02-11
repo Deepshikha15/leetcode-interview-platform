@@ -17,6 +17,44 @@ interface InterviewRouteState {
     previousQuestionId?: number;
 }
 
+const stripHtmlForSpeech = (text: string): string => (
+    text
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+);
+
+const trimToWords = (text: string, maxWords: number): string => {
+    const words = text.split(' ').filter(Boolean);
+    if (words.length <= maxWords) return text;
+    return `${words.slice(0, maxWords).join(' ')}...`;
+};
+
+const getProblemSpeechSummary = (question: Question): string => {
+    const plainDescription = stripHtmlForSpeech(question.description);
+    const firstSentence = plainDescription.match(/(.+?[.!?])(\s|$)/)?.[1] ?? plainDescription;
+    return trimToWords(firstSentence, 28);
+};
+
+const buildIntroSpeech = (question: Question): string => (
+    `Welcome to your coding interview. `
+);
+
+const buildReadAloudSpeech = (question: Question): string => {
+    const summary = getProblemSpeechSummary(question);
+    const firstExample = question.examples[0];
+
+    if (!firstExample) {
+        return `${question.title}. ${summary}`;
+    }
+
+    return (
+        `${question.title}. ${summary} ` +
+        `Example: input ${firstExample.input}. output ${firstExample.output}.`
+    );
+};
+
 const Interview: React.FC = () => {
     const location = useLocation();
     const navigate = useNavigate();
@@ -75,10 +113,7 @@ const Interview: React.FC = () => {
 
         // Read the question aloud
         if (question && speech.isSpeechSupported) {
-            const introText = `Welcome to your coding interview. Today's question is: ${question.title}. 
-        This is a ${question.difficulty} level problem. 
-        ${question.description}`;
-            speech.speak(introText);
+            speech.speak(buildIntroSpeech(question));
         }
     }, [question, speech, timer]);
 
@@ -331,9 +366,7 @@ const Interview: React.FC = () => {
         if (speech.isSpeaking) {
             speech.stopSpeaking();
         } else {
-            const text = `${question.title}. ${question.description}. 
-        Example: Input: ${question.examples[0].input}. Output: ${question.examples[0].output}.`;
-            speech.speak(text);
+            speech.speak(buildReadAloudSpeech(question));
         }
     };
 

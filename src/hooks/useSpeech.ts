@@ -25,6 +25,7 @@ export function useSpeech(): UseSpeechReturn {
 
     const recognitionRef = useRef<SpeechRecognition | null>(null);
     const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+    const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
 
     const isSpeechSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
     const isRecognitionSupported = typeof window !== 'undefined' &&
@@ -72,6 +73,25 @@ export function useSpeech(): UseSpeechReturn {
         };
     }, [isRecognitionSupported]);
 
+    // Keep an up-to-date list of available voices for better quality selection.
+    useEffect(() => {
+        if (!isSpeechSupported) return;
+
+        const loadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length > 0) {
+                voicesRef.current = voices;
+            }
+        };
+
+        loadVoices();
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+
+        return () => {
+            window.speechSynthesis.onvoiceschanged = null;
+        };
+    }, [isSpeechSupported]);
+
     // Text to Speech
     const speak = useCallback((text: string) => {
         if (!isSpeechSupported) return;
@@ -83,18 +103,55 @@ export function useSpeech(): UseSpeechReturn {
         const cleanText = text.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
 
         const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 0.9;
+        utterance.rate = 0.92;
         utterance.pitch = 1;
         utterance.volume = 1;
 
-        // Try to use a natural voice
-        const voices = window.speechSynthesis.getVoices();
-        const preferredVoice = voices.find(v =>
-            v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Alex')
-        ) || voices[0];
+        // Try to use a more natural, human-like voice when available.
+        const availableVoices = window.speechSynthesis.getVoices();
+        const voices = availableVoices.length > 0 ? availableVoices : voicesRef.current;
+
+        const getVoiceScore = (voice: SpeechSynthesisVoice): number => {
+            const name = voice.name.toLowerCase();
+            const lang = voice.lang.toLowerCase();
+            let score = 0;
+
+            if (lang.startsWith('en-us')) score += 40;
+            else if (lang.startsWith('en')) score += 20;
+
+            if (voice.default) score += 10;
+            if (voice.localService) score += 5;
+
+            if (
+                name.includes('jenny') ||
+                name.includes('aria') ||
+                name.includes('samantha') ||
+                name.includes('alex') ||
+                name.includes('google us english')
+            ) {
+                score += 45;
+            }
+
+            if (
+                name.includes('neural') ||
+                name.includes('natural') ||
+                name.includes('premium') ||
+                name.includes('enhanced') ||
+                name.includes('online')
+            ) {
+                score += 30;
+            }
+
+            return score;
+        };
+
+        const preferredVoice = [...voices].sort((a, b) => getVoiceScore(b) - getVoiceScore(a))[0];
 
         if (preferredVoice) {
             utterance.voice = preferredVoice;
+            utterance.lang = preferredVoice.lang || 'en-US';
+        } else {
+            utterance.lang = 'en-US';
         }
 
         utterance.onstart = () => setIsSpeaking(true);
@@ -200,4 +257,3 @@ declare global {
         webkitSpeechRecognition: SpeechRecognitionConstructor;
     }
 }
-
