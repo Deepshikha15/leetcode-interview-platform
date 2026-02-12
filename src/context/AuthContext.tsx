@@ -36,26 +36,74 @@ const hasWindow = () => typeof window !== 'undefined';
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const readUsersFromStorage = (): StoredUser[] => {
-    if (!hasWindow()) return [];
+const toStoredUser = (rawUser: unknown): { user: StoredUser | null; wasNormalized: boolean } => {
+    if (typeof rawUser !== 'object' || rawUser === null) {
+        return { user: null, wasNormalized: true };
+    }
+
+    const candidate = rawUser as Partial<StoredUser>;
+    if (typeof candidate.email !== 'string' || typeof candidate.password !== 'string') {
+        return { user: null, wasNormalized: true };
+    }
+
+    const normalizedEmail = normalizeEmail(candidate.email);
+    const normalizedPassword = candidate.password.trim();
+    if (!normalizedEmail || !normalizedPassword) {
+        return { user: null, wasNormalized: true };
+    }
+
+    const rawCreatedAt = typeof candidate.createdAt === 'string' ? candidate.createdAt.trim() : '';
+    const hasCreatedAt = rawCreatedAt.length > 0;
+    const normalizedCreatedAt = hasCreatedAt ? rawCreatedAt : new Date().toISOString();
+    return {
+        user: {
+            email: normalizedEmail,
+            password: normalizedPassword,
+            createdAt: normalizedCreatedAt
+        },
+        wasNormalized: (
+            normalizedEmail !== candidate.email ||
+            normalizedPassword !== candidate.password ||
+            !hasCreatedAt
+        )
+    };
+};
+
+const parseUsersFromStorage = (): { users: StoredUser[]; didMigrate: boolean } => {
+    if (!hasWindow()) return { users: [], didMigrate: false };
 
     try {
         const rawValue = window.localStorage.getItem(USERS_STORAGE_KEY);
         const parsed: unknown = rawValue ? JSON.parse(rawValue) : [];
 
-        if (!Array.isArray(parsed)) return [];
+        if (!Array.isArray(parsed)) return { users: [], didMigrate: false };
 
-        return parsed.filter((user): user is StoredUser => (
-            typeof user === 'object' &&
-            user !== null &&
-            typeof (user as StoredUser).email === 'string' &&
-            typeof (user as StoredUser).password === 'string' &&
-            typeof (user as StoredUser).createdAt === 'string'
-        ));
+        let didMigrate = false;
+        const dedupedUsers = new Map<string, StoredUser>();
+
+        parsed.forEach((rawUser) => {
+            const { user, wasNormalized } = toStoredUser(rawUser);
+            if (!user) {
+                if (wasNormalized) {
+                    didMigrate = true;
+                }
+                return;
+            }
+
+            if (wasNormalized || dedupedUsers.has(user.email)) {
+                didMigrate = true;
+            }
+
+            dedupedUsers.set(user.email, user);
+        });
+
+        return { users: Array.from(dedupedUsers.values()), didMigrate };
     } catch {
-        return [];
+        return { users: [], didMigrate: false };
     }
 };
+
+const readUsersFromStorage = (): StoredUser[] => parseUsersFromStorage().users;
 
 const writeUsersToStorage = (users: StoredUser[]): void => {
     if (!hasWindow()) return;
@@ -95,6 +143,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [headcount, setHeadcount] = useState<number>(() => readUsersFromStorage().length);
 
     useEffect(() => {
+        const { users, didMigrate } = parseUsersFromStorage();
+        if (didMigrate) {
+            writeUsersToStorage(users);
+        }
+    }, []);
+
+    useEffect(() => {
         let isMounted = true;
 
         const syncHeadcount = async () => {
@@ -115,13 +170,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const normalizedEmail = normalizeEmail(email);
         const trimmedPassword = password.trim();
         const users = readUsersFromStorage();
-
-        const matchingUser = users.find(existingUser =>
-            existingUser.email === normalizedEmail && existingUser.password === trimmedPassword
-        );
+        const matchingUser = users.find(existingUser => existingUser.email === normalizedEmail);
 
         if (!matchingUser) {
-            return { success: false, message: 'Invalid email or password.' };
+            return { success: false, message: 'No account found with this email. Please register first.' };
+        }
+
+        if (matchingUser.password !== trimmedPassword) {
+            return { success: false, message: 'Incorrect password.' };
         }
 
         writeSessionEmail(matchingUser.email);
