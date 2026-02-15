@@ -3,13 +3,21 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 const PORT = Number(process.env.PORT ?? 3001);
+const HOST = process.env.HOST?.trim() || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
+const SUPABASE_URL = process.env.SUPABASE_URL?.trim() ?? '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
+const SUPABASE_HEADCOUNT_TABLE = process.env.SUPABASE_HEADCOUNT_TABLE?.trim() || 'signup_headcount';
+const SUPABASE_REST_BASE_URL = SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1';
 const STORE_FILE_PATH = path.resolve(
     process.cwd(),
     process.env.HEADCOUNT_DATA_FILE ?? 'server/data/headcount-store.json'
 );
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SAFE_TABLE_NAME_REGEX = /^[a-zA-Z0-9_]+$/;
+const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const hasValidSupabaseTable = SAFE_TABLE_NAME_REGEX.test(SUPABASE_HEADCOUNT_TABLE);
 
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -46,6 +54,24 @@ const sendText = (res, statusCode, payload) => {
     });
     res.end(payload);
 };
+
+const buildSupabaseHeaders = (extraHeaders = {}) => ({
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    ...extraHeaders
+});
+
+const parseCountFromContentRange = (value) => {
+    if (typeof value !== 'string') return null;
+    const slashIndex = value.lastIndexOf('/');
+    if (slashIndex < 0 || slashIndex === value.length - 1) return null;
+
+    const rawCount = value.slice(slashIndex + 1);
+    const parsedCount = Number(rawCount);
+    return Number.isFinite(parsedCount) ? parsedCount : null;
+};
+
+const getSupabaseTableUrl = () => `${SUPABASE_REST_BASE_URL}/${SUPABASE_HEADCOUNT_TABLE}`;
 
 const ensureStoreFile = async () => {
     await fs.mkdir(path.dirname(STORE_FILE_PATH), { recursive: true });
@@ -90,7 +116,108 @@ const saveEmails = async (emails) => {
     );
 };
 
-let registeredEmails = await loadEmails();
+const createFileHeadcountStore = async () => {
+    let registeredEmails = await loadEmails();
+
+    return {
+        getHeadcount: async () => registeredEmails.size,
+        registerEmail: async (email) => {
+            const beforeSize = registeredEmails.size;
+            registeredEmails.add(email);
+            const wasAdded = registeredEmails.size > beforeSize;
+
+            if (wasAdded) {
+                await saveEmails(registeredEmails);
+            }
+
+            return {
+                headcount: registeredEmails.size,
+                added: wasAdded
+            };
+        },
+        mode: 'file'
+    };
+};
+
+const getSupabaseHeadcount = async () => {
+    const url = `${getSupabaseTableUrl()}?select=email`;
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: buildSupabaseHeaders({
+            Prefer: 'count=exact',
+            Range: '0-0'
+        })
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`Supabase count failed (${response.status}): ${errorBody}`);
+    }
+
+    const contentRange = response.headers.get('content-range');
+    const count = parseCountFromContentRange(contentRange);
+
+    if (count === null) {
+        throw new Error(`Supabase count missing/invalid content-range header: ${contentRange}`);
+    }
+
+    return count;
+};
+
+const registerSupabaseEmail = async (email) => {
+    const url = getSupabaseTableUrl();
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: buildSupabaseHeaders({
+            'Content-Type': 'application/json',
+            Prefer: 'return=minimal'
+        }),
+        body: JSON.stringify({ email })
+    });
+
+    if (!response.ok && response.status !== 409) {
+        const errorBody = await response.text();
+        throw new Error(`Supabase insert failed (${response.status}): ${errorBody}`);
+    }
+
+    const added = response.ok;
+    const headcount = await getSupabaseHeadcount();
+
+    return {
+        headcount,
+        added
+    };
+};
+
+const createSupabaseHeadcountStore = () => ({
+    getHeadcount: getSupabaseHeadcount,
+    registerEmail: registerSupabaseEmail,
+    mode: 'supabase'
+});
+
+const createHeadcountStore = async () => {
+    if (!hasSupabaseConfig) {
+        return createFileHeadcountStore();
+    }
+
+    if (!hasValidSupabaseTable) {
+        console.warn(
+            `Invalid SUPABASE_HEADCOUNT_TABLE value "${SUPABASE_HEADCOUNT_TABLE}". Falling back to file storage.`
+        );
+        return createFileHeadcountStore();
+    }
+
+    try {
+        const supabaseStore = createSupabaseHeadcountStore();
+        await supabaseStore.getHeadcount();
+        return supabaseStore;
+    } catch (error) {
+        console.error('Supabase headcount initialization failed. Falling back to file storage.', error);
+        return createFileHeadcountStore();
+    }
+};
+
+const headcountStore = await createHeadcountStore();
 
 const readRequestBody = async (req) => {
     const chunks = [];
@@ -116,8 +243,14 @@ const handleHeadcountApi = async (req, res, pathname) => {
     }
 
     if (pathname === '/api/headcount' && req.method === 'GET') {
-        sendJson(res, 200, { headcount: registeredEmails.size });
-        return true;
+        try {
+            const headcount = await headcountStore.getHeadcount();
+            sendJson(res, 200, { headcount });
+            return true;
+        } catch {
+            sendJson(res, 500, { error: 'Unable to read headcount.' });
+            return true;
+        }
     }
 
     if (pathname === '/api/headcount/register' && req.method === 'POST') {
@@ -130,21 +263,20 @@ const handleHeadcountApi = async (req, res, pathname) => {
                 return true;
             }
 
-            const beforeSize = registeredEmails.size;
-            registeredEmails.add(email);
-            const wasAdded = registeredEmails.size > beforeSize;
-
-            if (wasAdded) {
-                await saveEmails(registeredEmails);
-            }
+            const { headcount, added } = await headcountStore.registerEmail(email);
 
             sendJson(res, 200, {
-                headcount: registeredEmails.size,
-                added: wasAdded
+                headcount,
+                added
             });
             return true;
-        } catch {
-            sendJson(res, 400, { error: 'Invalid JSON payload.' });
+        } catch (error) {
+            if (error instanceof SyntaxError) {
+                sendJson(res, 400, { error: 'Invalid JSON payload.' });
+                return true;
+            }
+
+            sendJson(res, 500, { error: 'Unable to register user headcount.' });
             return true;
         }
     }
@@ -212,7 +344,11 @@ const server = createServer((req, res) => {
     });
 });
 
-server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-    console.log(`Headcount store file: ${STORE_FILE_PATH}`);
+server.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+    if (headcountStore.mode === 'supabase') {
+        console.log(`Headcount storage: Supabase table "${SUPABASE_HEADCOUNT_TABLE}"`);
+    } else {
+        console.log(`Headcount store file: ${STORE_FILE_PATH}`);
+    }
 });

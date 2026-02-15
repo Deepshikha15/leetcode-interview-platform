@@ -9,7 +9,7 @@ interface LoginLocationState {
 const Login: React.FC = () => {
     const navigate = useNavigate();
     const location = useLocation();
-    const { login } = useAuth();
+    const { login, headcount } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
@@ -34,6 +34,10 @@ const Login: React.FC = () => {
             <div className="auth-card animate-fade-in">
                 <h1 className="auth-title">Welcome Back</h1>
                 <p className="auth-subtitle">Sign in to continue your interview practice.</p>
+                <div className="auth-headcount" aria-live="polite">
+                    <span className="auth-headcount-label">Total Users</span>
+                    <strong className="auth-headcount-value">{headcount}</strong>
+                </div>
 
                 <form className="auth-form" onSubmit={handleSubmit}>
                     <label className="auth-label" htmlFor="login-email">Email</label>

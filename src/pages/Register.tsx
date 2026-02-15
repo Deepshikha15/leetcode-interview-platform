@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 const Register: React.FC = () => {
     const navigate = useNavigate();
-    const { register } = useAuth();
+    const { register, headcount } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -33,6 +33,10 @@ const Register: React.FC = () => {
             <div className="auth-card animate-fade-in">
                 <h1 className="auth-title">Create Account</h1>
                 <p className="auth-subtitle">Start practicing with your personalized interview journey.</p>
+                <div className="auth-headcount" aria-live="polite">
+                    <span className="auth-headcount-label">Total Users</span>
+                    <strong className="auth-headcount-value">{headcount}</strong>
+                </div>
 
                 <form className="auth-form" onSubmit={handleSubmit}>
                     <label className="auth-label" htmlFor="register-email">Email</label>

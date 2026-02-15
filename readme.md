@@ -1,22 +1,54 @@
 # LeetCode Interview Platform
 
-## Global Headcount (Render)
+## Signup Headcount API
 
-This app now supports a global headcount API:
+The app exposes:
 - `GET /api/headcount`
 - `POST /api/headcount/register` with `{ "email": "user@example.com" }`
 
-The frontend calls this API during auth so `Total Users` is shared across devices.
+These endpoints are called from auth flows so `Total Users` is shared across devices.
 
-### Render setup
-1. Use a Render **Web Service** (not static-only) for this repo.
-2. Build command: `npm run build`
-3. Start command: `npm run start`
-4. Add a persistent disk (recommended) and set:
-   - `HEADCOUNT_DATA_FILE=/var/data/headcount-store.json`
+## Supabase Setup
 
-### Optional frontend API base URL
+Set these server environment variables:
+- `SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co`
+- `SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY`
+- Optional: `SUPABASE_HEADCOUNT_TABLE=signup_headcount`
+- Optional local bind host: `HOST=127.0.0.1` (set `HOST=0.0.0.0` for container/public network binding)
+
+Create the table in Supabase SQL editor:
+
+```sql
+create table if not exists public.signup_headcount (
+  id bigserial primary key,
+  email text not null unique,
+  created_at timestamptz not null default now()
+);
+```
+
+## Local Fallback (No Supabase Vars)
+
+If Supabase env vars are missing or invalid, the server falls back to file storage:
+- `HEADCOUNT_DATA_FILE=server/data/headcount-store.json`
+
+## Deploy (Render)
+
+1. Push this repo to GitHub (includes `render.yaml` blueprint).
+2. In Render, click **New +** -> **Blueprint** and select this repo.
+3. Render will create a Node web service with:
+   - build: `npm ci && npm run build`
+   - start: `npm run start`
+   - health check: `/healthz`
+4. In Render service env vars, set:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+5. Deploy and verify:
+   - `GET https://<your-render-url>/healthz` returns `{ "ok": true }`
+   - `GET https://<your-render-url>/api/headcount` returns `{ "headcount": <number> }`
+
+## Optional Frontend API Base URL
+
 If frontend and API are deployed on different domains, set:
 - `VITE_API_BASE_URL=https://your-api-domain.com`
 
-If they are on the same Render service, you can leave `VITE_API_BASE_URL` unset.
+If they are on the same service/domain, leave `VITE_API_BASE_URL` unset.
