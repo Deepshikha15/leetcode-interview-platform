@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { getGlobalHeadcount, registerGlobalUser } from '../services/headcountApi';
+import { getGlobalHeadcount, recordGlobalLogin, registerGlobalUser } from '../services/headcountApi';
 
 interface StoredUser {
     email: string;
@@ -182,6 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         writeSessionEmail(matchingUser.email);
         setUser({ email: matchingUser.email });
+        void recordGlobalLogin(matchingUser.email);
         void getGlobalHeadcount().then((globalCount) => {
             if (globalCount !== null) {
                 setHeadcount(globalCount);

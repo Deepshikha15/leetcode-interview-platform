@@ -8,16 +8,25 @@ const DIST_DIR = path.resolve(process.cwd(), 'dist');
 const SUPABASE_URL = process.env.SUPABASE_URL?.trim() ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
 const SUPABASE_HEADCOUNT_TABLE = process.env.SUPABASE_HEADCOUNT_TABLE?.trim() || 'signup_headcount';
+const SUPABASE_LOGIN_EVENTS_TABLE = process.env.SUPABASE_LOGIN_EVENTS_TABLE?.trim() || 'login_events';
 const SUPABASE_REST_BASE_URL = SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1';
-const STORE_FILE_PATH = path.resolve(
+const HEADCOUNT_STORE_FILE_PATH = path.resolve(
     process.cwd(),
     process.env.HEADCOUNT_DATA_FILE ?? 'server/data/headcount-store.json'
+);
+const LOGIN_EVENTS_STORE_FILE_PATH = path.resolve(
+    process.cwd(),
+    process.env.LOGIN_EVENTS_DATA_FILE ?? 'server/data/login-events-store.json'
 );
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SAFE_TABLE_NAME_REGEX = /^[a-zA-Z0-9_]+$/;
 const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
-const hasValidSupabaseTable = SAFE_TABLE_NAME_REGEX.test(SUPABASE_HEADCOUNT_TABLE);
+const hasValidSupabaseHeadcountTable = SAFE_TABLE_NAME_REGEX.test(SUPABASE_HEADCOUNT_TABLE);
+const hasValidSupabaseLoginEventsTable = SAFE_TABLE_NAME_REGEX.test(SUPABASE_LOGIN_EVENTS_TABLE);
+const MAX_USER_AGENT_LENGTH = 1024;
+const MAX_DEVICE_LENGTH = 255;
+const MAX_IP_LENGTH = 128;
 
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -71,27 +80,67 @@ const parseCountFromContentRange = (value) => {
     return Number.isFinite(parsedCount) ? parsedCount : null;
 };
 
-const getSupabaseTableUrl = () => `${SUPABASE_REST_BASE_URL}/${SUPABASE_HEADCOUNT_TABLE}`;
+const getSupabaseHeadcountTableUrl = () => `${SUPABASE_REST_BASE_URL}/${SUPABASE_HEADCOUNT_TABLE}`;
+const getSupabaseLoginEventsTableUrl = () => `${SUPABASE_REST_BASE_URL}/${SUPABASE_LOGIN_EVENTS_TABLE}`;
 
-const ensureStoreFile = async () => {
-    await fs.mkdir(path.dirname(STORE_FILE_PATH), { recursive: true });
+const normalizeOptionalText = (value, maxLength) => {
+    if (typeof value !== 'string') return '';
+    const trimmedValue = value.trim();
+    if (!trimmedValue) return '';
+    return trimmedValue.slice(0, maxLength);
+};
+
+const getClientIp = (req) => {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const xRealIp = req.headers['x-real-ip'];
+
+    if (typeof forwardedFor === 'string') {
+        const firstIp = forwardedFor.split(',')[0]?.trim();
+        if (firstIp) {
+            return firstIp.slice(0, MAX_IP_LENGTH);
+        }
+    }
+
+    if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+        const firstHeader = forwardedFor[0];
+        if (typeof firstHeader === 'string') {
+            const firstIp = firstHeader.split(',')[0]?.trim();
+            if (firstIp) {
+                return firstIp.slice(0, MAX_IP_LENGTH);
+            }
+        }
+    }
+
+    if (typeof xRealIp === 'string' && xRealIp.trim()) {
+        return xRealIp.trim().slice(0, MAX_IP_LENGTH);
+    }
+
+    if (Array.isArray(xRealIp) && xRealIp.length > 0 && typeof xRealIp[0] === 'string') {
+        return xRealIp[0].trim().slice(0, MAX_IP_LENGTH);
+    }
+
+    return (req.socket.remoteAddress ?? '').slice(0, MAX_IP_LENGTH);
+};
+
+const ensureJsonStoreFile = async (filePath, initialPayload) => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
 
     try {
-        await fs.access(STORE_FILE_PATH);
+        await fs.access(filePath);
     } catch {
         await fs.writeFile(
-            STORE_FILE_PATH,
-            JSON.stringify({ emails: [] }, null, 2),
+            filePath,
+            JSON.stringify(initialPayload, null, 2),
             'utf-8'
         );
     }
 };
 
 const loadEmails = async () => {
-    await ensureStoreFile();
+    await ensureJsonStoreFile(HEADCOUNT_STORE_FILE_PATH, { emails: [] });
 
     try {
-        const rawValue = await fs.readFile(STORE_FILE_PATH, 'utf-8');
+        const rawValue = await fs.readFile(HEADCOUNT_STORE_FILE_PATH, 'utf-8');
         const parsed = rawValue ? JSON.parse(rawValue) : { emails: [] };
 
         if (!Array.isArray(parsed.emails)) {
@@ -110,8 +159,45 @@ const loadEmails = async () => {
 
 const saveEmails = async (emails) => {
     await fs.writeFile(
-        STORE_FILE_PATH,
+        HEADCOUNT_STORE_FILE_PATH,
         JSON.stringify({ emails: Array.from(emails).sort() }, null, 2),
+        'utf-8'
+    );
+};
+
+const loadLoginEvents = async () => {
+    await ensureJsonStoreFile(LOGIN_EVENTS_STORE_FILE_PATH, { events: [] });
+
+    try {
+        const rawValue = await fs.readFile(LOGIN_EVENTS_STORE_FILE_PATH, 'utf-8');
+        const parsed = rawValue ? JSON.parse(rawValue) : { events: [] };
+
+        if (!Array.isArray(parsed.events)) {
+            return [];
+        }
+
+        return parsed.events
+            .filter((entry) => typeof entry === 'object' && entry !== null)
+            .map((entry) => {
+                const record = entry;
+                return {
+                    email: typeof record.email === 'string' ? normalizeEmail(record.email) : '',
+                    userAgent: typeof record.userAgent === 'string' ? record.userAgent : '',
+                    device: typeof record.device === 'string' ? record.device : '',
+                    ipAddress: typeof record.ipAddress === 'string' ? record.ipAddress : '',
+                    createdAt: typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString()
+                };
+            })
+            .filter((entry) => Boolean(entry.email));
+    } catch {
+        return [];
+    }
+};
+
+const saveLoginEvents = async (events) => {
+    await fs.writeFile(
+        LOGIN_EVENTS_STORE_FILE_PATH,
+        JSON.stringify({ events }, null, 2),
         'utf-8'
     );
 };
@@ -139,8 +225,30 @@ const createFileHeadcountStore = async () => {
     };
 };
 
+const createFileLoginEventStore = async () => {
+    let loginEvents = await loadLoginEvents();
+
+    return {
+        recordLogin: async (entry) => {
+            loginEvents = [
+                ...loginEvents,
+                {
+                    email: entry.email,
+                    userAgent: entry.userAgent,
+                    device: entry.device,
+                    ipAddress: entry.ipAddress,
+                    createdAt: new Date().toISOString()
+                }
+            ];
+            await saveLoginEvents(loginEvents);
+            return { recorded: true };
+        },
+        mode: 'file'
+    };
+};
+
 const getSupabaseHeadcount = async () => {
-    const url = `${getSupabaseTableUrl()}?select=email`;
+    const url = `${getSupabaseHeadcountTableUrl()}?select=email`;
     const response = await fetch(url, {
         method: 'GET',
         headers: buildSupabaseHeaders({
@@ -165,7 +273,7 @@ const getSupabaseHeadcount = async () => {
 };
 
 const registerSupabaseEmail = async (email) => {
-    const url = getSupabaseTableUrl();
+    const url = getSupabaseHeadcountTableUrl();
     const response = await fetch(url, {
         method: 'POST',
         headers: buildSupabaseHeaders({
@@ -189,9 +297,51 @@ const registerSupabaseEmail = async (email) => {
     };
 };
 
+const validateSupabaseLoginEventsTable = async () => {
+    const url = `${getSupabaseLoginEventsTableUrl()}?select=id&limit=1`;
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: buildSupabaseHeaders()
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`Supabase login-events validation failed (${response.status}): ${errorBody}`);
+    }
+};
+
+const recordSupabaseLoginEvent = async (entry) => {
+    const url = getSupabaseLoginEventsTableUrl();
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: buildSupabaseHeaders({
+            'Content-Type': 'application/json',
+            Prefer: 'return=minimal'
+        }),
+        body: JSON.stringify({
+            email: entry.email,
+            user_agent: entry.userAgent,
+            device: entry.device,
+            ip_address: entry.ipAddress
+        })
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`Supabase login-events insert failed (${response.status}): ${errorBody}`);
+    }
+
+    return { recorded: true };
+};
+
 const createSupabaseHeadcountStore = () => ({
     getHeadcount: getSupabaseHeadcount,
     registerEmail: registerSupabaseEmail,
+    mode: 'supabase'
+});
+
+const createSupabaseLoginEventStore = () => ({
+    recordLogin: recordSupabaseLoginEvent,
     mode: 'supabase'
 });
 
@@ -200,7 +350,7 @@ const createHeadcountStore = async () => {
         return createFileHeadcountStore();
     }
 
-    if (!hasValidSupabaseTable) {
+    if (!hasValidSupabaseHeadcountTable) {
         console.warn(
             `Invalid SUPABASE_HEADCOUNT_TABLE value "${SUPABASE_HEADCOUNT_TABLE}". Falling back to file storage.`
         );
@@ -218,6 +368,29 @@ const createHeadcountStore = async () => {
 };
 
 const headcountStore = await createHeadcountStore();
+
+const createLoginEventStore = async () => {
+    if (!hasSupabaseConfig) {
+        return createFileLoginEventStore();
+    }
+
+    if (!hasValidSupabaseLoginEventsTable) {
+        console.warn(
+            `Invalid SUPABASE_LOGIN_EVENTS_TABLE value "${SUPABASE_LOGIN_EVENTS_TABLE}". Falling back to file storage.`
+        );
+        return createFileLoginEventStore();
+    }
+
+    try {
+        await validateSupabaseLoginEventsTable();
+        return createSupabaseLoginEventStore();
+    } catch (error) {
+        console.error('Supabase login-events initialization failed. Falling back to file storage.', error);
+        return createFileLoginEventStore();
+    }
+};
+
+const loginEventStore = await createLoginEventStore();
 
 const readRequestBody = async (req) => {
     const chunks = [];
@@ -277,6 +450,40 @@ const handleHeadcountApi = async (req, res, pathname) => {
             }
 
             sendJson(res, 500, { error: 'Unable to register user headcount.' });
+            return true;
+        }
+    }
+
+    if (pathname === '/api/logins/record' && req.method === 'POST') {
+        try {
+            const body = await readRequestBody(req);
+            const email = typeof body.email === 'string' ? normalizeEmail(body.email) : '';
+
+            if (!email || !EMAIL_REGEX.test(email)) {
+                sendJson(res, 400, { error: 'A valid email is required.' });
+                return true;
+            }
+
+            const userAgent = normalizeOptionalText(body.userAgent, MAX_USER_AGENT_LENGTH);
+            const device = normalizeOptionalText(body.device, MAX_DEVICE_LENGTH);
+            const ipAddress = getClientIp(req);
+
+            const { recorded } = await loginEventStore.recordLogin({
+                email,
+                userAgent,
+                device,
+                ipAddress
+            });
+
+            sendJson(res, 200, { recorded });
+            return true;
+        } catch (error) {
+            if (error instanceof SyntaxError) {
+                sendJson(res, 400, { error: 'Invalid JSON payload.' });
+                return true;
+            }
+
+            sendJson(res, 500, { error: 'Unable to record login event.' });
             return true;
         }
     }
@@ -349,6 +556,12 @@ server.listen(PORT, HOST, () => {
     if (headcountStore.mode === 'supabase') {
         console.log(`Headcount storage: Supabase table "${SUPABASE_HEADCOUNT_TABLE}"`);
     } else {
-        console.log(`Headcount store file: ${STORE_FILE_PATH}`);
+        console.log(`Headcount store file: ${HEADCOUNT_STORE_FILE_PATH}`);
+    }
+
+    if (loginEventStore.mode === 'supabase') {
+        console.log(`Login events storage: Supabase table "${SUPABASE_LOGIN_EVENTS_TABLE}"`);
+    } else {
+        console.log(`Login events store file: ${LOGIN_EVENTS_STORE_FILE_PATH}`);
     }
 });

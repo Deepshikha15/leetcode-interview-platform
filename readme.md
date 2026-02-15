@@ -1,12 +1,15 @@
 # LeetCode Interview Platform
 
-## Signup Headcount API
+## Auth Analytics APIs
 
 The app exposes:
 - `GET /api/headcount`
 - `POST /api/headcount/register` with `{ "email": "user@example.com" }`
+- `POST /api/logins/record` with `{ "email": "user@example.com", "userAgent": "...", "device": "..." }`
 
-These endpoints are called from auth flows so `Total Users` is shared across devices.
+These endpoints are called from auth flows so:
+- `Total Users` is shared across devices.
+- Every successful login is stored with device metadata.
 
 ## Supabase Setup
 
@@ -14,6 +17,7 @@ Set these server environment variables:
 - `SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co`
 - `SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY`
 - Optional: `SUPABASE_HEADCOUNT_TABLE=signup_headcount`
+- Optional: `SUPABASE_LOGIN_EVENTS_TABLE=login_events`
 - Optional local bind host: `HOST=127.0.0.1` (set `HOST=0.0.0.0` for container/public network binding)
 
 Create the table in Supabase SQL editor:
@@ -24,12 +28,22 @@ create table if not exists public.signup_headcount (
   email text not null unique,
   created_at timestamptz not null default now()
 );
+
+create table if not exists public.login_events (
+  id bigserial primary key,
+  email text not null,
+  user_agent text not null default '',
+  device text not null default '',
+  ip_address text not null default '',
+  created_at timestamptz not null default now()
+);
 ```
 
 ## Local Fallback (No Supabase Vars)
 
 If Supabase env vars are missing or invalid, the server falls back to file storage:
 - `HEADCOUNT_DATA_FILE=server/data/headcount-store.json`
+- `LOGIN_EVENTS_DATA_FILE=server/data/login-events-store.json`
 
 ## Deploy (Render)
 
@@ -42,6 +56,7 @@ If Supabase env vars are missing or invalid, the server falls back to file stora
 4. In Render service env vars, set:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
+   - Optional: `SUPABASE_LOGIN_EVENTS_TABLE`
 5. Deploy and verify:
    - `GET https://<your-render-url>/healthz` returns `{ "ok": true }`
    - `GET https://<your-render-url>/api/headcount` returns `{ "headcount": <number> }`

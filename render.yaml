@@ -17,3 +17,5 @@ services:
         sync: false
       - key: SUPABASE_HEADCOUNT_TABLE
         value: signup_headcount
+      - key: SUPABASE_LOGIN_EVENTS_TABLE
+        value: login_events
