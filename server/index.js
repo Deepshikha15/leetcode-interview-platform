@@ -46,32 +46,31 @@ const loadEnvFromFile = () => {
 
 loadEnvFromFile();
 
+// Stderr so logs show when stdout is buffered (e.g. Render, Docker, Better Stack)
+const log = (...args) => { console.error('[SERVER]', ...args); };
+
 const PORT = Number(process.env.PORT ?? 3001);
 const HOST = process.env.HOST?.trim() || '0.0.0.0';
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 
 if (!existsSync(DIST_DIR)) {
-    console.warn(`Warning: Distribution directory NOT found at ${DIST_DIR}. Frontend may not serve correctly.`);
+    log('WARN: DIST_DIR not found:', DIST_DIR);
 }
 
-console.log('--- Server Configuration ---');
-console.log(`PORT: ${PORT}`);
-console.log(`HOST: ${HOST}`);
-console.log(`DIST_DIR: ${DIST_DIR}`);
-console.log(`VITE_SUPABASE_URL present: ${!!process.env.VITE_SUPABASE_URL}`);
-console.log(`VITE_SUPABASE_ANON_KEY present: ${!!process.env.VITE_SUPABASE_ANON_KEY}`);
+log('--- Config --- PORT:', PORT, 'HOST:', HOST, 'DIST:', DIST_DIR);
+log('Supabase: URL=', !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL), 'ServiceKey=', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 try {
     if (existsSync(DIST_DIR)) {
         const files = await fs.readdir(DIST_DIR);
-        console.log(`DIST folder contains: ${files.join(', ')}`);
+        log('DIST files:', files.slice(0, 10).join(', '), files.length > 10 ? `... (+${files.length - 10})` : '');
     } else {
-        console.log('DIST folder does NOT exist!');
+        log('DIST folder does NOT exist');
     }
 } catch (e) {
-    console.log(`Error reading DIST folder: ${e.message}`);
+    log('DIST read error:', e.message);
 }
-console.log('---------------------------');
+log('--- Ready ---');
 
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -125,9 +124,9 @@ const supabaseAdmin = (supabaseUrl && supabaseServiceKey)
     : null;
 
 if (!supabaseAdmin) {
-    console.warn(`[SUPABASE] Admin client NOT initialized. URL: ${!!supabaseUrl}, Key: ${!!supabaseServiceKey}`);
+    log('[SUPABASE] Admin NOT initialized (cache disabled). Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY');
 } else {
-    console.log('[SUPABASE] Admin client initialized successfully.');
+    log('[SUPABASE] Admin initialized, cache enabled');
 }
 
 const syncToCache = async (problem) => {
@@ -160,9 +159,9 @@ const syncToCache = async (problem) => {
 };
 
 const handleLeetcodeApi = async (req, res, rawPathname) => {
-    // Standardize pathname: remove trailing slash and convert to lowercase for matching
     const pathname = rawPathname.toLowerCase().replace(/\/+$/, '') || '/';
     const method = req.method.toUpperCase();
+    log('[LEETCODE] Enter', method, pathname);
 
     if (method === 'OPTIONS') {
         res.writeHead(204, {
@@ -183,6 +182,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 100);
             const skip = Math.max(Number(url.searchParams.get('skip')) || 0, 0);
             const category = url.searchParams.get('category') || '';
+            log('[LEETCODE] /problems step 1: params', { difficulty, limit, skip, category: category || '(none)' });
 
             const problems = await leetcodeClient.problems({
                 limit,
@@ -194,6 +194,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                 }
             });
 
+            log('[LEETCODE] /problems step 2: got total=', problems?.total, 'questions=', problems?.questions?.length);
             sendJson(res, 200, {
                 total: problems.total,
                 questions: problems.questions.map(q => ({
@@ -208,7 +209,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
             return true;
         } catch (error) {
-            console.error('LeetCode problems fetch error:', error);
+            log('[LEETCODE] /problems error:', error.message || error);
             sendJson(res, 500, { error: 'Failed to fetch LeetCode problems.' });
             return true;
         }
@@ -217,8 +218,8 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
     const problemMatch = pathname.match(/^\/api\/leetcode\/problem\/([a-z0-9-]+)$/);
     if (problemMatch && method === 'GET') {
         const slug = problemMatch[1];
+        log('[LEETCODE] /problem/:slug step 1: slug=', slug);
         try {
-            // 1. Try Cache First
             if (supabaseAdmin) {
                 const { data: cached, error: cacheErr } = await supabaseAdmin
                     .from('leetcode_problems')
@@ -227,11 +228,11 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     .single();
 
                 if (cacheErr && cacheErr.code !== 'PGRST116') {
-                    console.error(`[CACHE] Lookup error for ${slug}:`, cacheErr.message);
+                    log('[CACHE] Lookup error', slug, cacheErr.message);
                 }
 
                 if (cached) {
-                    console.log(`[CACHE] Hit: Serving ${slug} from database.`);
+                    log('[LEETCODE] /problem/:slug step 2: cache HIT', slug);
                     sendJson(res, 200, {
                         questionId: slug,
                         title: cached.title,
@@ -246,17 +247,19 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     });
                     return true;
                 }
+                log('[LEETCODE] /problem/:slug step 2: cache MISS', slug);
             }
 
-            // 2. Fetch from LeetCode
+            log('[LEETCODE] /problem/:slug step 3: fetch from LeetCode', slug);
             const problem = await leetcodeClient.problem(slug);
 
             if (!problem || !problem.title) {
+                log('[LEETCODE] /problem/:slug step 4: not found', slug);
                 sendJson(res, 404, { error: 'Problem not found.' });
                 return true;
             }
 
-            // 3. Sync to Cache
+            log('[LEETCODE] /problem/:slug step 4: got problem, syncing to cache');
             await syncToCache(problem);
 
             sendJson(res, 200, {
@@ -276,7 +279,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
             return true;
         } catch (error) {
-            console.error('LeetCode problem detail error:', error);
+            log('[LEETCODE] /problem/:slug error:', error.message || error);
             sendJson(res, 500, { error: 'Failed to fetch problem detail.' });
             return true;
         }
@@ -287,28 +290,12 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             const origin = req.headers.host ? `http://${req.headers.host}` : 'http://localhost';
             const url = new URL(req.url ?? '/', origin);
             const difficulty = url.searchParams.get('difficulty') || undefined;
+            log('[LEETCODE] /random step 1: difficulty=', difficulty || '(any)');
 
-            // Step 1: Get total count of problems matching the difficulty
-            const countResult = await leetcodeClient.problems({
-                limit: 1,
-                offset: 0,
-                filters: {
-                    ...(difficulty ? { difficulty: difficulty.toUpperCase() } : {})
-                }
-            });
-
-            const total = countResult.total;
-            if (!total || total === 0) {
-                sendJson(res, 404, { error: 'No problems found for the given difficulty.' });
-                return true;
-            }
-
-            // Step 2: Pick a random free problem that has content
             let finalProblem = null;
-
-            // Try cache first
             if (supabaseAdmin) {
                 const diffLabel = (difficulty || 'Medium').charAt(0).toUpperCase() + (difficulty || 'Medium').slice(1).toLowerCase();
+                log('[LEETCODE] /random step 2: query cache difficulty=', diffLabel);
                 const { data: cachedBatch, error: batchErr } = await supabaseAdmin
                     .from('leetcode_problems')
                     .select('*')
@@ -316,12 +303,13 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     .limit(20);
 
                 if (batchErr) {
-                    console.error(`[CACHE] Random batch lookup error:`, batchErr.message);
+                    log('[LEETCODE] /random step 2: cache error', batchErr.message);
                 }
 
+                log('[LEETCODE] /random step 2: cache result count=', cachedBatch?.length ?? 0);
                 if (cachedBatch && cachedBatch.length > 0) {
                     const picked = cachedBatch[Math.floor(Math.random() * cachedBatch.length)];
-                    console.log(`[CACHE] Hit: Serving random problem ${picked.title_slug} from database.`);
+                    log('[LEETCODE] /random step 2: cache HIT, serving', picked.title_slug);
                     sendJson(res, 200, {
                         questionId: picked.title_slug,
                         title: picked.title,
@@ -335,9 +323,25 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                         exampleTestcaseList: picked.example_testcase_list
                     });
                     return true;
-                } else {
-                    console.log(`[CACHE] Miss: No cached problems found for difficulty ${diffLabel}.`);
                 }
+                log('[LEETCODE] /random step 2: cache MISS for', diffLabel);
+            } else {
+                log('[LEETCODE] /random step 2: no Supabase, skip cache');
+            }
+
+            log('[LEETCODE] /random step 3: LeetCode count request');
+            const countResult = await leetcodeClient.problems({
+                limit: 1,
+                offset: 0,
+                filters: {
+                    ...(difficulty ? { difficulty: difficulty.toUpperCase() } : {})
+                }
+            });
+
+            const total = countResult.total;
+            if (!total || total === 0) {
+                sendJson(res, 404, { error: 'No problems found for the given difficulty.' });
+                return true;
             }
 
             for (let attempt = 0; attempt < 10; attempt++) {
