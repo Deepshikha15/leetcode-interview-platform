@@ -6,6 +6,8 @@ import { supabase } from '../lib/supabase';
  * automatically upon successful Auth registration.
  */
 export const getGlobalHeadcount = async (): Promise<number | null> => {
+    if (!supabase) return null;
+
     try {
         // Option 1: Direct count (requires RLS to allow select)
         // const { count, error } = await supabase

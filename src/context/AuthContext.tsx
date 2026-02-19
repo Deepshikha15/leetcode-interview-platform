@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, SUPABASE_CONFIG_ERROR } from '../lib/supabase';
 import { getGlobalHeadcount } from '../services/headcountApi';
-import { User } from '@supabase/supabase-js';
 
 interface AuthUser {
     email: string;
@@ -30,9 +29,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        const client = supabase;
+        if (!client) {
+            setLoading(false);
+            return;
+        }
+
         // Initial session check
         const initAuth = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
+            const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
                 setUser({ email: session.user.email || '' });
             }
@@ -42,7 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         initAuth();
 
         // Listen for auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
             if (session?.user) {
                 setUser({ email: session.user.email || '' });
             } else {
@@ -78,6 +83,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, []);
 
     const login = async (email: string, password: string): Promise<AuthResult> => {
+        if (!supabase) {
+            return { success: false, message: SUPABASE_CONFIG_ERROR };
+        }
+
         try {
             const { error } = await supabase.auth.signInWithPassword({
                 email,
@@ -100,6 +109,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const register = async (email: string, password: string): Promise<AuthResult> => {
+        if (!supabase) {
+            return { success: false, message: SUPABASE_CONFIG_ERROR };
+        }
+
         try {
             const { error } = await supabase.auth.signUp({
                 email,
@@ -122,6 +135,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const resetPassword = async (email: string): Promise<AuthResult> => {
+        if (!supabase) {
+            return { success: false, message: SUPABASE_CONFIG_ERROR };
+        }
+
         try {
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
                 redirectTo: `${window.location.origin}/reset-password`,
@@ -134,7 +151,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const logout = async (): Promise<void> => {
-        await supabase.auth.signOut();
+        if (supabase) {
+            await supabase.auth.signOut();
+        }
         setUser(null);
     };
 
