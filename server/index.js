@@ -125,7 +125,9 @@ const supabaseAdmin = (supabaseUrl && supabaseServiceKey)
     : null;
 
 if (!supabaseAdmin) {
-    console.warn('Supabase Admin client NOT initialized. Caching will be disabled.');
+    console.warn(`[SUPABASE] Admin client NOT initialized. URL: ${!!supabaseUrl}, Key: ${!!supabaseServiceKey}`);
+} else {
+    console.log('[SUPABASE] Admin client initialized successfully.');
 }
 
 const syncToCache = async (problem) => {
@@ -218,16 +220,20 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
         try {
             // 1. Try Cache First
             if (supabaseAdmin) {
-                const { data: cached } = await supabaseAdmin
+                const { data: cached, error: cacheErr } = await supabaseAdmin
                     .from('leetcode_problems')
                     .select('*')
                     .eq('title_slug', slug)
                     .single();
 
+                if (cacheErr && cacheErr.code !== 'PGRST116') {
+                    console.error(`[CACHE] Lookup error for ${slug}:`, cacheErr.message);
+                }
+
                 if (cached) {
-                    console.log(`Serving ${slug} from cache.`);
+                    console.log(`[CACHE] Hit: Serving ${slug} from database.`);
                     sendJson(res, 200, {
-                        questionId: slug, // Approximate
+                        questionId: slug,
                         title: cached.title,
                         titleSlug: cached.title_slug,
                         difficulty: cached.difficulty,
@@ -300,17 +306,22 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             // Step 2: Pick a random free problem that has content
             let finalProblem = null;
 
-            // Try cache first if total count is low or as a primary fallback
+            // Try cache first
             if (supabaseAdmin) {
-                const { data: cachedBatch } = await supabaseAdmin
+                const diffLabel = (difficulty || 'Medium').charAt(0).toUpperCase() + (difficulty || 'Medium').slice(1).toLowerCase();
+                const { data: cachedBatch, error: batchErr } = await supabaseAdmin
                     .from('leetcode_problems')
                     .select('*')
-                    .eq('difficulty', (difficulty || 'Medium').charAt(0).toUpperCase() + (difficulty || 'Medium').slice(1).toLowerCase())
-                    .limit(10);
+                    .eq('difficulty', diffLabel)
+                    .limit(20);
+
+                if (batchErr) {
+                    console.error(`[CACHE] Random batch lookup error:`, batchErr.message);
+                }
 
                 if (cachedBatch && cachedBatch.length > 0) {
                     const picked = cachedBatch[Math.floor(Math.random() * cachedBatch.length)];
-                    console.log(`Serving random problem ${picked.title_slug} from cache.`);
+                    console.log(`[CACHE] Hit: Serving random problem ${picked.title_slug} from database.`);
                     sendJson(res, 200, {
                         questionId: picked.title_slug,
                         title: picked.title,
@@ -324,6 +335,8 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                         exampleTestcaseList: picked.example_testcase_list
                     });
                     return true;
+                } else {
+                    console.log(`[CACHE] Miss: No cached problems found for difficulty ${diffLabel}.`);
                 }
             }
 
