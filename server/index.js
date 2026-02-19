@@ -110,8 +110,12 @@ const sendText = (res, statusCode, payload) => {
 
 const leetcodeClient = new LeetCode();
 
-const handleLeetcodeApi = async (req, res, pathname) => {
-    if (req.method === 'OPTIONS') {
+const handleLeetcodeApi = async (req, res, rawPathname) => {
+    // Standardize pathname: remove trailing slash and convert to lowercase for matching
+    const pathname = rawPathname.toLowerCase().replace(/\/+$/, '') || '/';
+    const method = req.method.toUpperCase();
+
+    if (method === 'OPTIONS') {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET,OPTIONS',
@@ -121,7 +125,7 @@ const handleLeetcodeApi = async (req, res, pathname) => {
         return true;
     }
 
-    if (pathname === '/api/leetcode/problems' && req.method === 'GET') {
+    if (pathname === '/api/leetcode/problems' && method === 'GET') {
         try {
             const origin = req.headers.host ? `http://${req.headers.host}` : 'http://localhost';
             const url = new URL(req.url ?? '/', origin);
@@ -162,7 +166,7 @@ const handleLeetcodeApi = async (req, res, pathname) => {
     }
 
     const problemMatch = pathname.match(/^\/api\/leetcode\/problem\/([a-z0-9-]+)$/);
-    if (problemMatch && req.method === 'GET') {
+    if (problemMatch && method === 'GET') {
         try {
             const slug = problemMatch[1];
             const problem = await leetcodeClient.problem(slug);
@@ -195,7 +199,7 @@ const handleLeetcodeApi = async (req, res, pathname) => {
         }
     }
 
-    if (pathname === '/api/leetcode/random' && req.method === 'GET') {
+    if (pathname === '/api/leetcode/random' && method === 'GET') {
         try {
             const origin = req.headers.host ? `http://${req.headers.host}` : 'http://localhost';
             const url = new URL(req.url ?? '/', origin);
@@ -280,7 +284,7 @@ const handleLeetcodeApi = async (req, res, pathname) => {
         }
     }
 
-    if (pathname === '/api/leetcode/daily' && req.method === 'GET') {
+    if (pathname === '/api/leetcode/daily' && method === 'GET') {
         try {
             const daily = await leetcodeClient.daily();
 
@@ -363,6 +367,12 @@ const server = createServer((req, res) => {
 
         if (pathname === '/healthz') {
             sendJson(res, 200, { ok: true });
+            return;
+        }
+
+        if (pathname.startsWith('/api/')) {
+            console.warn(`[${new Date().toISOString()}] Unmatched API request: ${req.method} ${pathname}`);
+            sendJson(res, 404, { error: `API endpoint not found: ${pathname}` });
             return;
         }
 
