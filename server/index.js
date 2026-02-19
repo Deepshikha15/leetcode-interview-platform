@@ -59,6 +59,17 @@ console.log(`HOST: ${HOST}`);
 console.log(`DIST_DIR: ${DIST_DIR}`);
 console.log(`VITE_SUPABASE_URL present: ${!!process.env.VITE_SUPABASE_URL}`);
 console.log(`VITE_SUPABASE_ANON_KEY present: ${!!process.env.VITE_SUPABASE_ANON_KEY}`);
+
+try {
+    if (existsSync(DIST_DIR)) {
+        const files = await fs.readdir(DIST_DIR);
+        console.log(`DIST folder contains: ${files.join(', ')}`);
+    } else {
+        console.log('DIST folder does NOT exist!');
+    }
+} catch (e) {
+    console.log(`Error reading DIST folder: ${e.message}`);
+}
 console.log('---------------------------');
 
 const CONTENT_TYPES = {
@@ -309,34 +320,33 @@ const getSafeAssetPath = (pathname) => {
 const serveFrontend = async (req, res, pathname) => {
     try {
         const filePath = getSafeAssetPath(pathname);
-        const shouldFallbackToIndex = !path.extname(filePath);
-        const targetPath = shouldFallbackToIndex ? path.join(DIST_DIR, 'index.html') : filePath;
+        const hasExtension = path.extname(filePath) !== '';
 
-        const fileBuffer = await fs.readFile(targetPath);
-        const extension = path.extname(targetPath).toLowerCase();
-        const contentType = CONTENT_TYPES[extension] ?? 'application/octet-stream';
+        // If it's a direct file request (has extension), try to serve it.
+        // Otherwise, it's a client-side route, serve index.html.
+        const targetPath = hasExtension ? filePath : path.join(DIST_DIR, 'index.html');
 
-        res.writeHead(200, { 'Content-Type': contentType });
-        res.end(fileBuffer);
-    } catch (err) {
-        if (pathname !== '/index.html') {
-            try {
-                const fallback = await fs.readFile(path.join(DIST_DIR, 'index.html'));
-                console.log(`Fallback: Serving index.html for unknown path "${pathname}"`);
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(fallback);
+        try {
+            const fileBuffer = await fs.readFile(targetPath);
+            const extension = path.extname(targetPath).toLowerCase();
+            const contentType = CONTENT_TYPES[extension] ?? 'text/html; charset=utf-8';
+
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(fileBuffer);
+        } catch (readErr) {
+            // If the specific file wasn't found but it has an extension, it's a real 404 for an asset
+            if (hasExtension) {
+                console.warn(`Asset not found: ${pathname} (mapped to ${targetPath})`);
+                sendText(res, 404, `Asset not found: ${pathname}`);
                 return;
-            } catch (fallbackErr) {
-                console.error(`Double Fault: Failed to serve index.html fallback for "${pathname}":`, fallbackErr.message);
             }
+            // If index.html fallback failed
+            console.error(`SPA Fallback failed: Could not read index.html at ${targetPath}`);
+            sendText(res, 404, 'Application not built correctly. Dist folder or index.html missing.');
         }
-
-        console.error(`Not Found: ${pathname} (mapped to ${getSafeAssetPath(pathname)})`);
-        sendText(
-            res,
-            404,
-            'Not found. Build the frontend with "npm run build" before starting the server.'
-        );
+    } catch (err) {
+        console.error(`Frontend server error for ${pathname}:`, err.message);
+        sendText(res, 500, 'Internal server error serving frontend.');
     }
 };
 
