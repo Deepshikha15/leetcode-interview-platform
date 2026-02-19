@@ -53,6 +53,14 @@ if (!existsSync(DIST_DIR)) {
     console.warn(`Warning: Distribution directory NOT found at ${DIST_DIR}. Frontend may not serve correctly.`);
 }
 
+console.log('--- Server Configuration ---');
+console.log(`PORT: ${PORT}`);
+console.log(`HOST: ${HOST}`);
+console.log(`DIST_DIR: ${DIST_DIR}`);
+console.log(`VITE_SUPABASE_URL present: ${!!process.env.VITE_SUPABASE_URL}`);
+console.log(`VITE_SUPABASE_ANON_KEY present: ${!!process.env.VITE_SUPABASE_ANON_KEY}`);
+console.log('---------------------------');
+
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
@@ -223,7 +231,12 @@ const handleLeetcodeApi = async (req, res, pathname) => {
             }
 
             if (!finalProblem) {
-                sendJson(res, 404, { error: 'Could not find a high-quality free problem. Please try again.' });
+                console.error(`Random problem search failed after 10 attempts for difficulty: ${difficulty}`);
+                sendJson(res, 404, {
+                    error: 'Could not find a high-quality free problem. This might be due to LeetCode API limits or connectivity issues on Render.',
+                    attempts: 10,
+                    difficulty: difficulty || 'any'
+                });
                 return true;
             }
 
@@ -333,6 +346,8 @@ const server = createServer((req, res) => {
     const pathname = requestUrl.pathname;
 
     (async () => {
+        console.log(`[${new Date().toISOString()}] ${req.method} ${pathname}${requestUrl.search}`);
+
         const handledByLeetcode = await handleLeetcodeApi(req, res, pathname);
         if (handledByLeetcode) return;
 
@@ -343,7 +358,7 @@ const server = createServer((req, res) => {
 
         await serveFrontend(req, res, pathname);
     })().catch((error) => {
-        console.error('Unhandled server error:', error);
+        console.error(`[${new Date().toISOString()}] Unhandled server error for ${pathname}:`, error);
         sendJson(res, 500, { error: 'Internal server error.' });
     });
 });
