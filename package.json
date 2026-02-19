@@ -24,6 +24,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@openai/codex": "^0.98.0",
     "@supabase/supabase-js": "^2.97.0",
+    "dotenv": "^17.3.1",
     "leetcode-query": "^2.0.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
