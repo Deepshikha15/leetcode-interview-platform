@@ -46,24 +46,45 @@ const loadEnvFromFile = () => {
 
 loadEnvFromFile();
 
-// Stderr so logs show when stdout is buffered (e.g. Render, Docker, Better Stack)
-const log = (...args) => { console.error('[SERVER]', ...args); };
+// --- Better Stack: send logs directly (HTTP API). Set BETTERSTACK_SOURCE_TOKEN to enable.
+const BETTERSTACK_TOKEN = process.env.BETTERSTACK_SOURCE_TOKEN?.trim();
+// Ingest host from your Better Stack source (HTTPS, no port). Override with BETTERSTACK_INGEST_URL.
+const BETTERSTACK_URL = (process.env.BETTERSTACK_INGEST_URL?.trim() || 'https://s1748369.eu-fsn-3.betterstackdata.com').replace(/\/+$/, '');
+
+function sendToBetterStack(message) {
+    if (!BETTERSTACK_TOKEN || !message) return;
+    const body = JSON.stringify({ message: String(message).slice(0, 10000), dt: new Date().toISOString() });
+    fetch(BETTERSTACK_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${BETTERSTACK_TOKEN}`,
+            'Content-Type': 'application/json'
+        },
+        body
+    }).catch(() => { /* fire-and-forget */ });
+}
+
+const log = (...args) => {
+    const line = '[SERVER] ' + args.map(a => (a instanceof Error ? a.message : (typeof a === 'object' && a !== null ? JSON.stringify(a) : String(a)))).join(' ');
+    process.stderr.write(line + '\n');
+    sendToBetterStack(line);
+};
 
 const PORT = Number(process.env.PORT ?? 3001);
 const HOST = process.env.HOST?.trim() || '0.0.0.0';
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 
 if (!existsSync(DIST_DIR)) {
-    log('WARN: DIST_DIR not found:', DIST_DIR);
+    log('WARN: DIST_DIR not found', DIST_DIR);
 }
 
 log('--- Config --- PORT:', PORT, 'HOST:', HOST, 'DIST:', DIST_DIR);
-log('Supabase: URL=', !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL), 'ServiceKey=', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+log('Supabase URL:', !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL), 'ServiceKey:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 try {
     if (existsSync(DIST_DIR)) {
         const files = await fs.readdir(DIST_DIR);
-        log('DIST files:', files.slice(0, 10).join(', '), files.length > 10 ? `... (+${files.length - 10})` : '');
+        log('DIST files:', files.length, files.slice(0, 5).join(', '));
     } else {
         log('DIST folder does NOT exist');
     }
@@ -124,9 +145,9 @@ const supabaseAdmin = (supabaseUrl && supabaseServiceKey)
     : null;
 
 if (!supabaseAdmin) {
-    log('[SUPABASE] Admin NOT initialized (cache disabled). Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY');
+    log('[SUPABASE] Admin NOT initialized. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY');
 } else {
-    log('[SUPABASE] Admin initialized, cache enabled');
+    log('[SUPABASE] Admin initialized');
 }
 
 const syncToCache = async (problem) => {
@@ -149,19 +170,19 @@ const syncToCache = async (problem) => {
             }, { onConflict: 'title_slug' });
 
         if (error) {
-            console.error(`Cache sync failed for ${problem.titleSlug}:`, error.message);
+            log('[CACHE] Sync failed', problem.titleSlug, error.message);
         } else {
-            console.log(`Successfully cached ${problem.titleSlug}`);
+            log('[CACHE] Synced', problem.titleSlug);
         }
     } catch (e) {
-        console.error(`Unexpected error caching ${problem.titleSlug}:`, e.message);
+        log('[CACHE] Sync error', problem.titleSlug, e.message);
     }
 };
 
 const handleLeetcodeApi = async (req, res, rawPathname) => {
+    // Standardize pathname: remove trailing slash and convert to lowercase for matching
     const pathname = rawPathname.toLowerCase().replace(/\/+$/, '') || '/';
     const method = req.method.toUpperCase();
-    log('[LEETCODE] Enter', method, pathname);
 
     if (method === 'OPTIONS') {
         res.writeHead(204, {
@@ -182,7 +203,6 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 100);
             const skip = Math.max(Number(url.searchParams.get('skip')) || 0, 0);
             const category = url.searchParams.get('category') || '';
-            log('[LEETCODE] /problems step 1: params', { difficulty, limit, skip, category: category || '(none)' });
 
             const problems = await leetcodeClient.problems({
                 limit,
@@ -194,7 +214,6 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                 }
             });
 
-            log('[LEETCODE] /problems step 2: got total=', problems?.total, 'questions=', problems?.questions?.length);
             sendJson(res, 200, {
                 total: problems.total,
                 questions: problems.questions.map(q => ({
@@ -218,8 +237,8 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
     const problemMatch = pathname.match(/^\/api\/leetcode\/problem\/([a-z0-9-]+)$/);
     if (problemMatch && method === 'GET') {
         const slug = problemMatch[1];
-        log('[LEETCODE] /problem/:slug step 1: slug=', slug);
         try {
+            // 1. Try Cache First
             if (supabaseAdmin) {
                 const { data: cached, error: cacheErr } = await supabaseAdmin
                     .from('leetcode_problems')
@@ -232,7 +251,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                 }
 
                 if (cached) {
-                    log('[LEETCODE] /problem/:slug step 2: cache HIT', slug);
+                    log('[CACHE] Hit', slug);
                     sendJson(res, 200, {
                         questionId: slug,
                         title: cached.title,
@@ -247,19 +266,18 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     });
                     return true;
                 }
-                log('[LEETCODE] /problem/:slug step 2: cache MISS', slug);
             }
 
-            log('[LEETCODE] /problem/:slug step 3: fetch from LeetCode', slug);
+            // 2. Fetch from LeetCode
             const problem = await leetcodeClient.problem(slug);
 
             if (!problem || !problem.title) {
-                log('[LEETCODE] /problem/:slug step 4: not found', slug);
+                log('[LEETCODE] /problem not found', slug);
                 sendJson(res, 404, { error: 'Problem not found.' });
                 return true;
             }
 
-            log('[LEETCODE] /problem/:slug step 4: got problem, syncing to cache');
+            log('[LEETCODE] /problem got', slug, 'syncing cache');
             await syncToCache(problem);
 
             sendJson(res, 200, {
@@ -279,7 +297,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
             return true;
         } catch (error) {
-            log('[LEETCODE] /problem/:slug error:', error.message || error);
+            log('[LEETCODE] /problem error:', error.message || error);
             sendJson(res, 500, { error: 'Failed to fetch problem detail.' });
             return true;
         }
@@ -290,12 +308,11 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             const origin = req.headers.host ? `http://${req.headers.host}` : 'http://localhost';
             const url = new URL(req.url ?? '/', origin);
             const difficulty = url.searchParams.get('difficulty') || undefined;
-            log('[LEETCODE] /random step 1: difficulty=', difficulty || '(any)');
 
+            // Step 1: Try Supabase cache first (so prod works without calling LeetCode)
             let finalProblem = null;
             if (supabaseAdmin) {
                 const diffLabel = (difficulty || 'Medium').charAt(0).toUpperCase() + (difficulty || 'Medium').slice(1).toLowerCase();
-                log('[LEETCODE] /random step 2: query cache difficulty=', diffLabel);
                 const { data: cachedBatch, error: batchErr } = await supabaseAdmin
                     .from('leetcode_problems')
                     .select('*')
@@ -303,13 +320,13 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     .limit(20);
 
                 if (batchErr) {
-                    log('[LEETCODE] /random step 2: cache error', batchErr.message);
+                    log('[CACHE] Random batch error', batchErr.message);
                 }
 
-                log('[LEETCODE] /random step 2: cache result count=', cachedBatch?.length ?? 0);
+                log('[LEETCODE] /random cache count', cachedBatch?.length ?? 0);
                 if (cachedBatch && cachedBatch.length > 0) {
                     const picked = cachedBatch[Math.floor(Math.random() * cachedBatch.length)];
-                    log('[LEETCODE] /random step 2: cache HIT, serving', picked.title_slug);
+                    log('[CACHE] Hit random', picked.title_slug);
                     sendJson(res, 200, {
                         questionId: picked.title_slug,
                         title: picked.title,
@@ -324,12 +341,10 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     });
                     return true;
                 }
-                log('[LEETCODE] /random step 2: cache MISS for', diffLabel);
-            } else {
-                log('[LEETCODE] /random step 2: no Supabase, skip cache');
+                log('[CACHE] Miss random', diffLabel);
             }
 
-            log('[LEETCODE] /random step 3: LeetCode count request');
+            log('[LEETCODE] /random fallback to LeetCode');
             const countResult = await leetcodeClient.problems({
                 limit: 1,
                 offset: 0,
@@ -339,7 +354,9 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
 
             const total = countResult.total;
+            log('[LEETCODE] /random LeetCode total', total);
             if (!total || total === 0) {
+                log('[LEETCODE] /random 404 no problems');
                 sendJson(res, 404, { error: 'No problems found for the given difficulty.' });
                 return true;
             }
@@ -370,7 +387,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             }
 
             if (!finalProblem) {
-                console.error(`Random problem search failed after 10 attempts for difficulty: ${difficulty}`);
+                log('[LEETCODE] /random failed 10 attempts', difficulty);
                 sendJson(res, 404, {
                     error: 'Could not find a high-quality free problem. This might be due to LeetCode API limits or connectivity issues on Render.',
                     attempts: 10,
@@ -402,7 +419,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
             return true;
         } catch (error) {
-            console.error('LeetCode random problem error:', error);
+            log('[LEETCODE] /random error:', error.message || error);
             sendJson(res, 500, { error: 'Failed to fetch a random problem.' });
             return true;
         }
@@ -429,7 +446,7 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
             });
             return true;
         } catch (error) {
-            console.error('LeetCode daily challenge error:', error);
+            log('[LEETCODE] /daily error:', error.message || error);
             sendJson(res, 500, { error: 'Failed to fetch daily challenge.' });
             return true;
         }
@@ -462,7 +479,7 @@ const serveFrontend = async (req, res, pathname) => {
             res.writeHead(200, { 'Content-Type': contentType });
             res.end(fileBuffer);
         } catch (readErr) {
-            console.error(`[FRONTEND] Failed to read ${targetPath}:`, readErr.message);
+            log('[FRONTEND] Read failed', targetPath, readErr.message);
             // If the specific file wasn't found but it has an extension, it's a real 404 for an asset
             if (hasExtension) {
                 sendText(res, 404, `Asset not found: ${pathname}`);
@@ -472,7 +489,7 @@ const serveFrontend = async (req, res, pathname) => {
             sendText(res, 404, `SPA Fallback failed: index.html not found/readable at ${targetPath}. Build might be broken.`);
         }
     } catch (err) {
-        console.error(`Frontend server error for ${pathname}:`, err.message);
+        log('[FRONTEND] Error', pathname, err.message);
         sendText(res, 500, 'Internal server error serving frontend.');
     }
 };
@@ -483,7 +500,7 @@ const server = createServer((req, res) => {
     const pathname = requestUrl.pathname;
 
     (async () => {
-        console.log(`[${new Date().toISOString()}] ${req.method} ${pathname}${requestUrl.search}`);
+        log('Incoming', req.method, pathname + (requestUrl.search || ''));
 
         if (pathname === '/api/debug') {
             const debugInfo = {
@@ -519,18 +536,18 @@ const server = createServer((req, res) => {
         }
 
         if (pathname.startsWith('/api/')) {
-            console.warn(`[${new Date().toISOString()}] Unmatched API request: ${req.method} ${pathname}`);
+            log('Unmatched API', pathname);
             sendJson(res, 404, { error: `API endpoint not found: ${pathname}` });
             return;
         }
 
         await serveFrontend(req, res, pathname);
     })().catch((error) => {
-        console.error(`[${new Date().toISOString()}] Unhandled server error for ${pathname}:`, error);
+        log('Unhandled error', pathname, error.message || error);
         sendJson(res, 500, { error: 'Internal server error.' });
     });
 });
 
 server.listen(PORT, HOST, () => {
-    console.log(`Server listening on http://${HOST}:${PORT}`);
+    log('Listening on http://' + HOST + ':' + PORT);
 });
