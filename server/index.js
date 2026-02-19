@@ -1,5 +1,6 @@
 import { createServer } from 'http';
 import { LeetCode } from 'leetcode-query';
+import { createClient } from '@supabase/supabase-js';
 import { promises as fs } from 'fs';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
@@ -110,6 +111,52 @@ const sendText = (res, statusCode, payload) => {
 
 const leetcodeClient = new LeetCode();
 
+// Initialize Supabase admin client for caching
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabaseAdmin = (supabaseUrl && supabaseServiceKey)
+    ? createClient(supabaseUrl, supabaseServiceKey, {
+        auth: {
+            autoRefreshToken: false,
+            persistSession: false
+        }
+    })
+    : null;
+
+if (!supabaseAdmin) {
+    console.warn('Supabase Admin client NOT initialized. Caching will be disabled.');
+}
+
+const syncToCache = async (problem) => {
+    if (!supabaseAdmin || !problem || !problem.titleSlug) return;
+
+    try {
+        const { error } = await supabaseAdmin
+            .from('leetcode_problems')
+            .upsert({
+                title_slug: problem.titleSlug,
+                title: problem.title,
+                content: problem.content,
+                difficulty: problem.difficulty,
+                topic_tags: problem.topicTags || [],
+                code_snippets: problem.codeSnippets || [],
+                sample_test_case: problem.sampleTestCase,
+                hints: problem.hints || [],
+                example_testcase_list: problem.exampleTestcaseList || [],
+                last_synced_at: new Date().toISOString()
+            }, { onConflict: 'title_slug' });
+
+        if (error) {
+            console.error(`Cache sync failed for ${problem.titleSlug}:`, error.message);
+        } else {
+            console.log(`Successfully cached ${problem.titleSlug}`);
+        }
+    } catch (e) {
+        console.error(`Unexpected error caching ${problem.titleSlug}:`, e.message);
+    }
+};
+
 const handleLeetcodeApi = async (req, res, rawPathname) => {
     // Standardize pathname: remove trailing slash and convert to lowercase for matching
     const pathname = rawPathname.toLowerCase().replace(/\/+$/, '') || '/';
@@ -167,14 +214,44 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
 
     const problemMatch = pathname.match(/^\/api\/leetcode\/problem\/([a-z0-9-]+)$/);
     if (problemMatch && method === 'GET') {
+        const slug = problemMatch[1];
         try {
-            const slug = problemMatch[1];
+            // 1. Try Cache First
+            if (supabaseAdmin) {
+                const { data: cached } = await supabaseAdmin
+                    .from('leetcode_problems')
+                    .select('*')
+                    .eq('title_slug', slug)
+                    .single();
+
+                if (cached) {
+                    console.log(`Serving ${slug} from cache.`);
+                    sendJson(res, 200, {
+                        questionId: slug, // Approximate
+                        title: cached.title,
+                        titleSlug: cached.title_slug,
+                        difficulty: cached.difficulty,
+                        content: cached.content,
+                        topicTags: cached.topic_tags,
+                        codeSnippets: cached.code_snippets,
+                        sampleTestCase: cached.sample_test_case,
+                        hints: cached.hints,
+                        exampleTestcaseList: cached.example_testcase_list
+                    });
+                    return true;
+                }
+            }
+
+            // 2. Fetch from LeetCode
             const problem = await leetcodeClient.problem(slug);
 
             if (!problem || !problem.title) {
                 sendJson(res, 404, { error: 'Problem not found.' });
                 return true;
             }
+
+            // 3. Sync to Cache
+            await syncToCache(problem);
 
             sendJson(res, 200, {
                 questionId: problem.questionId,
@@ -222,6 +299,34 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
 
             // Step 2: Pick a random free problem that has content
             let finalProblem = null;
+
+            // Try cache first if total count is low or as a primary fallback
+            if (supabaseAdmin) {
+                const { data: cachedBatch } = await supabaseAdmin
+                    .from('leetcode_problems')
+                    .select('*')
+                    .eq('difficulty', (difficulty || 'Medium').charAt(0).toUpperCase() + (difficulty || 'Medium').slice(1).toLowerCase())
+                    .limit(10);
+
+                if (cachedBatch && cachedBatch.length > 0) {
+                    const picked = cachedBatch[Math.floor(Math.random() * cachedBatch.length)];
+                    console.log(`Serving random problem ${picked.title_slug} from cache.`);
+                    sendJson(res, 200, {
+                        questionId: picked.title_slug,
+                        title: picked.title,
+                        titleSlug: picked.title_slug,
+                        difficulty: picked.difficulty,
+                        content: picked.content,
+                        topicTags: picked.topic_tags,
+                        codeSnippets: picked.code_snippets,
+                        sampleTestCase: picked.sample_test_case,
+                        hints: picked.hints,
+                        exampleTestcaseList: picked.example_testcase_list
+                    });
+                    return true;
+                }
+            }
+
             for (let attempt = 0; attempt < 10; attempt++) {
                 const randomOffset = Math.floor(Math.random() * total);
                 const batch = await leetcodeClient.problems({
@@ -240,6 +345,8 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                     const detail = await leetcodeClient.problem(candidateSlug);
                     if (detail && detail.content && detail.codeSnippets && detail.codeSnippets.length > 0) {
                         finalProblem = detail;
+                        // Sync to cache for next time
+                        await syncToCache(finalProblem);
                         break;
                     }
                 }
