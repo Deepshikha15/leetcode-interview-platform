@@ -458,15 +458,14 @@ const serveFrontend = async (req, res, pathname) => {
             res.writeHead(200, { 'Content-Type': contentType });
             res.end(fileBuffer);
         } catch (readErr) {
+            console.error(`[FRONTEND] Failed to read ${targetPath}:`, readErr.message);
             // If the specific file wasn't found but it has an extension, it's a real 404 for an asset
             if (hasExtension) {
-                console.warn(`Asset not found: ${pathname} (mapped to ${targetPath})`);
                 sendText(res, 404, `Asset not found: ${pathname}`);
                 return;
             }
             // If index.html fallback failed
-            console.error(`SPA Fallback failed: Could not read index.html at ${targetPath}`);
-            sendText(res, 404, 'Application not built correctly. Dist folder or index.html missing.');
+            sendText(res, 404, `SPA Fallback failed: index.html not found/readable at ${targetPath}. Build might be broken.`);
         }
     } catch (err) {
         console.error(`Frontend server error for ${pathname}:`, err.message);
@@ -481,6 +480,31 @@ const server = createServer((req, res) => {
 
     (async () => {
         console.log(`[${new Date().toISOString()}] ${req.method} ${pathname}${requestUrl.search}`);
+
+        if (pathname === '/api/debug') {
+            const debugInfo = {
+                timestamp: new Date().toISOString(),
+                env: {
+                    NODE_ENV: process.env.NODE_ENV,
+                    PORT: PORT,
+                    HOST: HOST,
+                    DIST_DIR: DIST_DIR,
+                    VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
+                    SUPABASE_URL: !!process.env.SUPABASE_URL,
+                    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    VITE_SUPABASE_ANON_KEY: !!process.env.VITE_SUPABASE_ANON_KEY
+                },
+                dist: {
+                    exists: existsSync(DIST_DIR),
+                    contents: existsSync(DIST_DIR) ? await fs.readdir(DIST_DIR) : []
+                },
+                supabase: {
+                    initialized: !!supabaseAdmin
+                }
+            };
+            sendJson(res, 200, debugInfo);
+            return;
+        }
 
         const handledByLeetcode = await handleLeetcodeApi(req, res, pathname);
         if (handledByLeetcode) return;
