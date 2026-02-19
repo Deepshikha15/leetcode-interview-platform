@@ -1,11 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { getGlobalHeadcount, recordGlobalLogin, registerGlobalUser } from '../services/headcountApi';
-
-interface StoredUser {
-    email: string;
-    password: string;
-    createdAt: string;
-}
+import { supabase } from '../lib/supabase';
+import { getGlobalHeadcount } from '../services/headcountApi';
+import { User } from '@supabase/supabase-js';
 
 interface AuthUser {
     email: string;
@@ -20,133 +16,43 @@ interface AuthContextValue {
     user: AuthUser | null;
     isAuthenticated: boolean;
     headcount: number;
-    login: (email: string, password: string) => AuthResult;
-    register: (email: string, password: string) => AuthResult;
-    resetPassword: (email: string, newPassword: string) => AuthResult;
-    logout: () => void;
+    login: (email: string, password: string) => Promise<AuthResult>;
+    register: (email: string, password: string) => Promise<AuthResult>;
+    resetPassword: (email: string) => Promise<AuthResult>;
+    logout: () => Promise<void>;
 }
-
-const USERS_STORAGE_KEY = 'leetcodepro.auth.users';
-const SESSION_STORAGE_KEY = 'leetcodepro.auth.currentUser';
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-const hasWindow = () => typeof window !== 'undefined';
-
-const normalizeEmail = (email: string): string => email.trim().toLowerCase();
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const toStoredUser = (rawUser: unknown): { user: StoredUser | null; wasNormalized: boolean } => {
-    if (typeof rawUser !== 'object' || rawUser === null) {
-        return { user: null, wasNormalized: true };
-    }
-
-    const candidate = rawUser as Partial<StoredUser>;
-    if (typeof candidate.email !== 'string' || typeof candidate.password !== 'string') {
-        return { user: null, wasNormalized: true };
-    }
-
-    const normalizedEmail = normalizeEmail(candidate.email);
-    const normalizedPassword = candidate.password.trim();
-    if (!normalizedEmail || !normalizedPassword) {
-        return { user: null, wasNormalized: true };
-    }
-
-    const rawCreatedAt = typeof candidate.createdAt === 'string' ? candidate.createdAt.trim() : '';
-    const hasCreatedAt = rawCreatedAt.length > 0;
-    const normalizedCreatedAt = hasCreatedAt ? rawCreatedAt : new Date().toISOString();
-    return {
-        user: {
-            email: normalizedEmail,
-            password: normalizedPassword,
-            createdAt: normalizedCreatedAt
-        },
-        wasNormalized: (
-            normalizedEmail !== candidate.email ||
-            normalizedPassword !== candidate.password ||
-            !hasCreatedAt
-        )
-    };
-};
-
-const parseUsersFromStorage = (): { users: StoredUser[]; didMigrate: boolean } => {
-    if (!hasWindow()) return { users: [], didMigrate: false };
-
-    try {
-        const rawValue = window.localStorage.getItem(USERS_STORAGE_KEY);
-        const parsed: unknown = rawValue ? JSON.parse(rawValue) : [];
-
-        if (!Array.isArray(parsed)) return { users: [], didMigrate: false };
-
-        let didMigrate = false;
-        const dedupedUsers = new Map<string, StoredUser>();
-
-        parsed.forEach((rawUser) => {
-            const { user, wasNormalized } = toStoredUser(rawUser);
-            if (!user) {
-                if (wasNormalized) {
-                    didMigrate = true;
-                }
-                return;
-            }
-
-            if (wasNormalized || dedupedUsers.has(user.email)) {
-                didMigrate = true;
-            }
-
-            dedupedUsers.set(user.email, user);
-        });
-
-        return { users: Array.from(dedupedUsers.values()), didMigrate };
-    } catch {
-        return { users: [], didMigrate: false };
-    }
-};
-
-const readUsersFromStorage = (): StoredUser[] => parseUsersFromStorage().users;
-
-const writeUsersToStorage = (users: StoredUser[]): void => {
-    if (!hasWindow()) return;
-    window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-};
-
-const readSessionEmail = (): string | null => {
-    if (!hasWindow()) return null;
-
-    const email = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!email) return null;
-    return normalizeEmail(email);
-};
-
-const writeSessionEmail = (email: string): void => {
-    if (!hasWindow()) return;
-    window.localStorage.setItem(SESSION_STORAGE_KEY, normalizeEmail(email));
-};
-
-const clearSessionEmail = (): void => {
-    if (!hasWindow()) return;
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
-};
-
-const getInitialUser = (): AuthUser | null => {
-    const sessionEmail = readSessionEmail();
-    if (!sessionEmail) return null;
-
-    const users = readUsersFromStorage();
-    const matchingUser = users.find(user => user.email === sessionEmail);
-
-    return matchingUser ? { email: matchingUser.email } : null;
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [user, setUser] = useState<AuthUser | null>(getInitialUser);
-    const [headcount, setHeadcount] = useState<number>(() => readUsersFromStorage().length);
+    const [user, setUser] = useState<AuthUser | null>(null);
+    const [headcount, setHeadcount] = useState<number>(0);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const { users, didMigrate } = parseUsersFromStorage();
-        if (didMigrate) {
-            writeUsersToStorage(users);
-        }
+        // Initial session check
+        const initAuth = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) {
+                setUser({ email: session.user.email || '' });
+            }
+            setLoading(false);
+        };
+
+        initAuth();
+
+        // Listen for auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (session?.user) {
+                setUser({ email: session.user.email || '' });
+            } else {
+                setUser(null);
+            }
+        });
+
+        return () => {
+            subscription.unsubscribe();
+        };
     }, []);
 
     useEffect(() => {
@@ -159,118 +65,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         };
 
+        // Initial sync
         void syncHeadcount();
+
+        // Periodic sync every 60 seconds for global accuracy across devices
+        const interval = setInterval(syncHeadcount, 60000);
 
         return () => {
             isMounted = false;
+            clearInterval(interval);
         };
     }, []);
 
-    const login = (email: string, password: string): AuthResult => {
-        const normalizedEmail = normalizeEmail(email);
-        const trimmedPassword = password.trim();
-        const users = readUsersFromStorage();
-        const matchingUser = users.find(existingUser => existingUser.email === normalizedEmail);
+    const login = async (email: string, password: string): Promise<AuthResult> => {
+        try {
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
 
-        if (!matchingUser) {
-            return { success: false, message: 'No account found with this email. Please register first.' };
-        }
-
-        if (matchingUser.password !== trimmedPassword) {
-            return { success: false, message: 'Incorrect password.' };
-        }
-
-        writeSessionEmail(matchingUser.email);
-        setUser({ email: matchingUser.email });
-        void recordGlobalLogin(matchingUser.email);
-        void getGlobalHeadcount().then((globalCount) => {
-            if (globalCount !== null) {
-                setHeadcount(globalCount);
+            if (error) {
+                return { success: false, message: error.message };
             }
-        });
 
-        return { success: true };
+            // Immediately refresh headcount after login
+            void getGlobalHeadcount().then((count) => {
+                if (count !== null) setHeadcount(count);
+            });
+
+            return { success: true };
+        } catch (error: any) {
+            return { success: false, message: error.message || 'Login failed' };
+        }
     };
 
-    const register = (email: string, password: string): AuthResult => {
-        const normalizedEmail = normalizeEmail(email);
-        const trimmedPassword = password.trim();
-        const users = readUsersFromStorage();
+    const register = async (email: string, password: string): Promise<AuthResult> => {
+        try {
+            const { error } = await supabase.auth.signUp({
+                email,
+                password,
+            });
 
-        if (!normalizedEmail) {
-            return { success: false, message: 'Email is required.' };
-        }
-
-        if (!EMAIL_REGEX.test(normalizedEmail)) {
-            return { success: false, message: 'Enter a valid email address.' };
-        }
-
-        if (trimmedPassword.length < 6) {
-            return { success: false, message: 'Password must be at least 6 characters.' };
-        }
-
-        const alreadyExists = users.some(existingUser => existingUser.email === normalizedEmail);
-        if (alreadyExists) {
-            return { success: false, message: 'Account already exists. Please sign in.' };
-        }
-
-        const nextUsers: StoredUser[] = [
-            ...users,
-            {
-                email: normalizedEmail,
-                password: trimmedPassword,
-                createdAt: new Date().toISOString()
+            if (error) {
+                return { success: false, message: error.message };
             }
-        ];
 
-        writeUsersToStorage(nextUsers);
-        writeSessionEmail(normalizedEmail);
-        setUser({ email: normalizedEmail });
-        setHeadcount(nextUsers.length); // Local fallback while global sync is in flight.
+            // Immediately refresh headcount after registration
+            void getGlobalHeadcount().then((count) => {
+                if (count !== null) setHeadcount(count);
+            });
 
-        void registerGlobalUser(normalizedEmail).then((globalCount) => {
-            if (globalCount !== null) {
-                setHeadcount(globalCount);
-            }
-        });
-
-        return { success: true };
+            return { success: true, message: 'Check your email for the confirmation link!' };
+        } catch (error: any) {
+            return { success: false, message: error.message || 'Registration failed' };
+        }
     };
 
-    const resetPassword = (email: string, newPassword: string): AuthResult => {
-        const normalizedEmail = normalizeEmail(email);
-        const trimmedPassword = newPassword.trim();
-        const users = readUsersFromStorage();
-
-        if (!normalizedEmail) {
-            return { success: false, message: 'Email is required.' };
+    const resetPassword = async (email: string): Promise<AuthResult> => {
+        try {
+            const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                redirectTo: `${window.location.origin}/reset-password`,
+            });
+            if (error) return { success: false, message: error.message };
+            return { success: true, message: 'Password reset link sent to your email.' };
+        } catch (error: any) {
+            return { success: false, message: error.message || 'Reset failed' };
         }
-
-        if (!EMAIL_REGEX.test(normalizedEmail)) {
-            return { success: false, message: 'Enter a valid email address.' };
-        }
-
-        if (trimmedPassword.length < 6) {
-            return { success: false, message: 'Password must be at least 6 characters.' };
-        }
-
-        const userIndex = users.findIndex(existingUser => existingUser.email === normalizedEmail);
-        if (userIndex < 0) {
-            return { success: false, message: 'No account found with this email.' };
-        }
-
-        const updatedUsers = [...users];
-        updatedUsers[userIndex] = {
-            ...updatedUsers[userIndex],
-            password: trimmedPassword
-        };
-        writeUsersToStorage(updatedUsers);
-
-        return { success: true, message: 'Password reset successful.' };
     };
 
-    const logout = (): void => {
-        clearSessionEmail();
+    const logout = async (): Promise<void> => {
+        await supabase.auth.signOut();
         setUser(null);
     };
 
@@ -283,6 +147,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetPassword,
         logout
     }), [headcount, user]);
+
+    if (loading) {
+        return <div className="loading-container"><div className="spinner"></div></div>;
+    }
 
     return (
         <AuthContext.Provider value={value}>

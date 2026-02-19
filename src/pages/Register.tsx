@@ -9,23 +9,37 @@ const Register: React.FC = () => {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setErrorMessage('');
+        setSuccessMessage('');
 
         if (password !== confirmPassword) {
             setErrorMessage('Passwords do not match.');
             return;
         }
 
-        const result = register(email, password);
-        if (!result.success) {
-            setErrorMessage(result.message ?? 'Unable to create account.');
-            return;
-        }
+        setIsLoading(true);
+        try {
+            const result = await register(email, password);
+            if (!result.success) {
+                setErrorMessage(result.message ?? 'Unable to create account.');
+                setIsLoading(false);
+                return;
+            }
 
-        navigate('/', { replace: true });
+            setSuccessMessage(result.message || 'Registration successful! Please check your email.');
+            // We don't navigate immediately if email confirmation is required
+            if (!result.message?.includes('check your email')) {
+                navigate('/', { replace: true });
+            }
+        } catch (error) {
+            setErrorMessage('An unexpected error occurred.');
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -73,9 +87,14 @@ const Register: React.FC = () => {
                     />
 
                     {errorMessage && <div className="auth-error">{errorMessage}</div>}
+                    {successMessage && <div className="auth-success">{successMessage}</div>}
 
-                    <button type="submit" className="btn btn-primary btn-large auth-submit">
-                        Create Account
+                    <button
+                        type="submit"
+                        className="btn btn-primary btn-large auth-submit"
+                        disabled={isLoading}
+                    >
+                        {isLoading ? 'Creating Account...' : 'Create Account'}
                     </button>
                 </form>
 

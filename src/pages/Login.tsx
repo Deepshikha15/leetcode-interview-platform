@@ -13,20 +13,28 @@ const Login: React.FC = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
     const from = ((location.state as LoginLocationState | null)?.from ?? '/') || '/';
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setErrorMessage('');
+        setIsLoading(true);
 
-        const result = login(email, password);
-        if (!result.success) {
-            setErrorMessage(result.message ?? 'Unable to sign in.');
-            return;
+        try {
+            const result = await login(email, password);
+            if (!result.success) {
+                setErrorMessage(result.message ?? 'Unable to sign in.');
+                setIsLoading(false);
+                return;
+            }
+
+            navigate(from, { replace: true });
+        } catch (error) {
+            setErrorMessage('An unexpected error occurred.');
+            setIsLoading(false);
         }
-
-        navigate(from, { replace: true });
     };
 
     return (
@@ -73,8 +81,12 @@ const Login: React.FC = () => {
 
                     {errorMessage && <div className="auth-error">{errorMessage}</div>}
 
-                    <button type="submit" className="btn btn-primary btn-large auth-submit">
-                        Sign In
+                    <button
+                        type="submit"
+                        className="btn btn-primary btn-large auth-submit"
+                        disabled={isLoading}
+                    >
+                        {isLoading ? 'Signing In...' : 'Sign In'}
                     </button>
                 </form>
 

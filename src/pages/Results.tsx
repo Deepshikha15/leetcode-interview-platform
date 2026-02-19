@@ -5,27 +5,22 @@ import { useAuth } from '../context/AuthContext';
 
 type Difficulty = 'Easy' | 'Medium' | 'Hard';
 type Language = 'javascript' | 'python';
-type LearningPath = 'quick-review' | 'skip';
+type LearningPath = 'quick-review';
 
 interface ResultsRouteState {
     scoreResult?: ScoreResult;
-    problemId?: number;
+    problemId?: number | string;
     problemTitle?: string;
     difficulty?: Difficulty;
     language?: Language;
     passedTests?: number;
     totalTests?: number;
+    questionContent?: string;
+    questionHints?: string[];
+    questionTopicTags?: { name: string; slug: string }[];
 }
 
-interface LearningBacklogItem {
-    problemId: number | null;
-    problemTitle: string;
-    scoreOutOf5: number;
-    summary: string;
-    savedAt: string;
-}
 
-const LEARNING_BACKLOG_KEY = 'leetcodepro.learningBacklog';
 
 const learningJourneys: {
     id: LearningPath;
@@ -36,11 +31,6 @@ const learningJourneys: {
             id: 'quick-review',
             label: 'Quick Review (5 min)',
             description: 'See optimal solution + key insights'
-        },
-        {
-            id: 'skip',
-            label: 'Skip for now',
-            description: 'Save to learning backlog'
         }
     ];
 
@@ -100,8 +90,7 @@ const Results: React.FC = () => {
         navigate('/interview', {
             state: {
                 difficulty: routeState.difficulty ?? 'Medium',
-                language: routeState.language ?? 'javascript',
-                previousQuestionId: routeState.problemId
+                language: routeState.language ?? 'javascript'
             }
         });
     };
@@ -115,28 +104,7 @@ const Results: React.FC = () => {
         });
     };
 
-    const saveToBacklog = (): boolean => {
-        try {
-            const rawValue = localStorage.getItem(LEARNING_BACKLOG_KEY);
-            const parsed: unknown = rawValue ? JSON.parse(rawValue) : [];
-            const existing: LearningBacklogItem[] = Array.isArray(parsed)
-                ? parsed as LearningBacklogItem[]
-                : [];
 
-            const deduped = existing.filter(item => item.problemId !== routeState.problemId);
-            deduped.push({
-                problemId: routeState.problemId ?? null,
-                problemTitle,
-                scoreOutOf5: learningScoreOutOf5,
-                summary: learningSummary,
-                savedAt: new Date().toISOString()
-            });
-            localStorage.setItem(LEARNING_BACKLOG_KEY, JSON.stringify(deduped));
-            return true;
-        } catch {
-            return false;
-        }
-    };
 
     const handleJourneySelection = (journeyId: LearningPath) => {
         setSelectedJourney(prev => (prev === journeyId ? null : journeyId));
@@ -144,18 +112,6 @@ const Results: React.FC = () => {
 
     const handleConfirmJourney = () => {
         if (!selectedJourney) return;
-
-        if (selectedJourney === 'skip') {
-            const didSave = saveToBacklog();
-            navigate('/backlog', {
-                state: {
-                    ...routeState,
-                    problemTitle,
-                    didSave
-                }
-            });
-            return;
-        }
 
         navigate('/review', {
             state: {
@@ -274,29 +230,23 @@ const Results: React.FC = () => {
                     <div className="learning-path-score">
                         Your Score: {learningScoreOutOf5}/5 ({learningSummary})
                     </div>
-                    {routeState.totalTests !== undefined && routeState.totalTests > 0 && (
-                        <div className="learning-path-tests">
-                            Tests Passed: {routeState.passedTests ?? 0}/{routeState.totalTests}
-                        </div>
-                    )}
                     <div className="learning-path-subtitle">Choose your learning journey:</div>
                     <div className="learning-path-options">
-                        {learningJourneys.map((journey) => (
-                            <label
-                                key={journey.id}
-                                className={`learning-path-option ${selectedJourney === journey.id ? 'selected' : ''}`}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={selectedJourney === journey.id}
-                                    onChange={() => handleJourneySelection(journey.id)}
-                                />
-                                <div className="learning-path-option-content">
-                                    <span className="learning-path-option-label">{journey.label}</span>
-                                    <span className="learning-path-option-description">{journey.description}</span>
-                                </div>
-                            </label>
-                        ))}
+                        {/* Simplified for a single option */}
+                        <label
+                            key="quick-review"
+                            className={`learning-path-option ${selectedJourney === 'quick-review' ? 'selected' : ''}`}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={selectedJourney === 'quick-review'}
+                                onChange={() => handleJourneySelection('quick-review')}
+                            />
+                            <div className="learning-path-option-content">
+                                <span className="learning-path-option-label">Quick Review (5 min)</span>
+                                <span className="learning-path-option-description">See optimal solution + key insights</span>
+                            </div>
+                        </label>
                     </div>
                     <div className="learning-path-actions">
                         <button
@@ -304,7 +254,7 @@ const Results: React.FC = () => {
                             onClick={handleConfirmJourney}
                             disabled={!selectedJourney}
                         >
-                            {selectedJourney === 'skip' ? 'Save to Backlog' : 'Start Learning Path'}
+                            Start Learning Path
                         </button>
                     </div>
                 </div>
@@ -321,7 +271,7 @@ const Results: React.FC = () => {
                     🔄 Try Again
                 </button>
             </div>
-        </div>
+        </div >
     );
 };
 

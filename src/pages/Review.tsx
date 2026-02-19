@@ -1,6 +1,5 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getQuestionById } from '../data/questions';
 import { ScoreResult } from '../utils/scoring';
 
 type Difficulty = 'Easy' | 'Medium' | 'Hard';
@@ -8,7 +7,7 @@ type Language = 'javascript' | 'python';
 
 interface ReviewRouteState {
     scoreResult?: ScoreResult;
-    problemId?: number;
+    problemId?: number | string;
     problemTitle?: string;
     difficulty?: Difficulty;
     language?: Language;
@@ -16,6 +15,9 @@ interface ReviewRouteState {
     totalTests?: number;
     scoreOutOf5?: number;
     learningSummary?: string;
+    questionContent?: string;
+    questionHints?: string[];
+    questionTopicTags?: { name: string; slug: string }[];
 }
 
 const Review: React.FC = () => {
@@ -23,16 +25,12 @@ const Review: React.FC = () => {
     const navigate = useNavigate();
     const routeState = (location.state ?? {}) as ReviewRouteState;
 
-    const question = typeof routeState.problemId === 'number'
-        ? getQuestionById(routeState.problemId)
-        : undefined;
-    const problemTitle = routeState.problemTitle ?? question?.title ?? 'Problem Review';
-    const difficulty = routeState.difficulty ?? question?.difficulty ?? 'Medium';
-    const hints = question?.hints ?? [];
-    const examples = question?.examples ?? [];
+    const problemTitle = routeState.problemTitle ?? 'Problem Review';
+    const difficulty = routeState.difficulty ?? 'Medium';
+    const hints = routeState.questionHints ?? [];
+    const questionContent = routeState.questionContent ?? '';
     const hintsToShow = hints.slice(0, 3);
-    const examplesToShow = examples.slice(0, 2);
-    const hasReviewContext = Boolean(question || routeState.problemTitle || routeState.scoreResult);
+    const hasReviewContext = Boolean(routeState.problemTitle || routeState.scoreResult || questionContent);
 
     const resultsState = routeState.scoreResult
         ? {
@@ -70,42 +68,23 @@ const Review: React.FC = () => {
                 </p>
                 <div className="review-meta-row">
                     <span className={`badge badge-${difficulty.toLowerCase()}`}>{difficulty}</span>
-                    {question?.category && <span className="review-meta-pill">{question.category}</span>}
+                    {routeState.questionTopicTags && routeState.questionTopicTags.length > 0 && (
+                        <span className="review-meta-pill">{routeState.questionTopicTags[0].name}</span>
+                    )}
                     <span className="review-meta-pill">5 min path</span>
                 </div>
             </div>
 
             <div className="review-grid">
-                {question?.description && (
+                {questionContent && (
                     <section className="review-card review-card-full animate-fade-in">
                         <h3 className="review-card-title">Problem Recap</h3>
                         <div
                             className="question-description"
-                            dangerouslySetInnerHTML={{ __html: question.description }}
+                            dangerouslySetInnerHTML={{ __html: questionContent }}
                         />
                     </section>
                 )}
-
-                <section className="review-card animate-fade-in">
-                    <h3 className="review-card-title">Optimal Strategy</h3>
-                    <p className="review-body-text">
-                        {question?.expectedApproach ?? 'No approach details available for this problem.'}
-                    </p>
-                </section>
-
-                <section className="review-card animate-fade-in">
-                    <h3 className="review-card-title">Complexity Targets</h3>
-                    <div className="review-complexity-grid">
-                        <div className="review-complexity-item">
-                            <span className="review-complexity-label">Time</span>
-                            <strong>{question?.timeComplexity ?? 'N/A'}</strong>
-                        </div>
-                        <div className="review-complexity-item">
-                            <span className="review-complexity-label">Space</span>
-                            <strong>{question?.spaceComplexity ?? 'N/A'}</strong>
-                        </div>
-                    </div>
-                </section>
 
                 <section className="review-card animate-fade-in">
                     <h3 className="review-card-title">Checkpoint Hints</h3>
@@ -117,22 +96,6 @@ const Review: React.FC = () => {
                         </ul>
                     ) : (
                         <p className="review-body-text">No hints available.</p>
-                    )}
-                </section>
-
-                <section className="review-card animate-fade-in">
-                    <h3 className="review-card-title">Worked Examples</h3>
-                    {examplesToShow.length > 0 ? (
-                        <ul className="review-list">
-                            {examplesToShow.map((example, index) => (
-                                <li key={index}>
-                                    <div><strong>Input:</strong> {example.input}</div>
-                                    <div><strong>Output:</strong> {example.output}</div>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : (
-                        <p className="review-body-text">No examples available.</p>
                     )}
                 </section>
 
@@ -191,7 +154,7 @@ const Review: React.FC = () => {
                         })
                     }
                 >
-                    Continue Practice
+                    Start New Interview
                 </button>
             </div>
         </div>

@@ -6,37 +6,37 @@ const ForgotPassword: React.FC = () => {
     const navigate = useNavigate();
     const { resetPassword } = useAuth();
     const [email, setEmail] = useState('');
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setErrorMessage('');
         setSuccessMessage('');
+        setIsLoading(true);
 
-        if (newPassword !== confirmPassword) {
-            setErrorMessage('Passwords do not match.');
-            return;
+        try {
+            const result = await resetPassword(email);
+            if (!result.success) {
+                setErrorMessage(result.message ?? 'Unable to send reset link.');
+                setIsLoading(false);
+                return;
+            }
+
+            setSuccessMessage(result.message ?? 'Password reset link sent to your email.');
+            setIsLoading(false);
+        } catch (error) {
+            setErrorMessage('An unexpected error occurred.');
+            setIsLoading(false);
         }
-
-        const result = resetPassword(email, newPassword);
-        if (!result.success) {
-            setErrorMessage(result.message ?? 'Unable to reset password.');
-            return;
-        }
-
-        setSuccessMessage(result.message ?? 'Password reset successful. Please sign in.');
-        setNewPassword('');
-        setConfirmPassword('');
     };
 
     return (
         <div className="auth-page">
             <div className="auth-card animate-fade-in">
                 <h1 className="auth-title">Forgot Password</h1>
-                <p className="auth-subtitle">Set a new password for your existing account.</p>
+                <p className="auth-subtitle">Enter your email to receive a password reset link.</p>
 
                 <form className="auth-form" onSubmit={handleSubmit}>
                     <label className="auth-label" htmlFor="forgot-email">Email</label>
@@ -50,33 +50,15 @@ const ForgotPassword: React.FC = () => {
                         required
                     />
 
-                    <label className="auth-label" htmlFor="forgot-password">New Password</label>
-                    <input
-                        id="forgot-password"
-                        className="auth-input"
-                        type="password"
-                        value={newPassword}
-                        onChange={(event) => setNewPassword(event.target.value)}
-                        autoComplete="new-password"
-                        required
-                    />
-
-                    <label className="auth-label" htmlFor="forgot-confirm-password">Confirm New Password</label>
-                    <input
-                        id="forgot-confirm-password"
-                        className="auth-input"
-                        type="password"
-                        value={confirmPassword}
-                        onChange={(event) => setConfirmPassword(event.target.value)}
-                        autoComplete="new-password"
-                        required
-                    />
-
                     {errorMessage && <div className="auth-error">{errorMessage}</div>}
                     {successMessage && <div className="auth-success">{successMessage}</div>}
 
-                    <button type="submit" className="btn btn-primary btn-large auth-submit">
-                        Reset Password
+                    <button
+                        type="submit"
+                        className="btn btn-primary btn-large auth-submit"
+                        disabled={isLoading}
+                    >
+                        {isLoading ? 'Sending...' : 'Send Reset Link'}
                     </button>
                 </form>
 

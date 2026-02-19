@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { Question, getRandomQuestion } from '../data/questions';
+import { LeetCodeProblemDetail, fetchRandomProblem } from '../services/leetcodeApi';
 import { useTimer } from '../hooks/useTimer';
 import { useSpeech } from '../hooks/useSpeech';
 import { calculateScore, validateCode, ScoringInput } from '../utils/scoring';
@@ -14,7 +14,6 @@ type ComplexityStage = 'time' | 'space' | 'done';
 interface InterviewRouteState {
     difficulty?: Difficulty;
     language?: Language;
-    previousQuestionId?: number;
 }
 
 const stripHtmlForSpeech = (text: string): string => (
@@ -31,29 +30,28 @@ const trimToWords = (text: string, maxWords: number): string => {
     return `${words.slice(0, maxWords).join(' ')}...`;
 };
 
-const getProblemSpeechSummary = (question: Question): string => {
-    const plainDescription = stripHtmlForSpeech(question.description);
+const getProblemSpeechSummary = (question: LeetCodeProblemDetail): string => {
+    const plainDescription = stripHtmlForSpeech(question.content ?? '');
     const firstSentence = plainDescription.match(/(.+?[.!?])(\s|$)/)?.[1] ?? plainDescription;
     return trimToWords(firstSentence, 28);
 };
 
-const buildIntroSpeech = (question: Question): string => (
+const buildIntroSpeech = (_question: LeetCodeProblemDetail): string => (
     `Welcome to your coding interview. `
 );
 
-const buildReadAloudSpeech = (question: Question): string => {
+const buildReadAloudSpeech = (question: LeetCodeProblemDetail): string => {
     const summary = getProblemSpeechSummary(question);
-    const firstExample = question.examples[0];
-
-    if (!firstExample) {
-        return `${question.title}. ${summary}`;
-    }
-
-    return (
-        `${question.title}. ${summary} ` +
-        `Example: input ${firstExample.input}. output ${firstExample.output}.`
-    );
+    return `${question.title}. ${summary}`;
 };
+
+const getStarterCode = (question: LeetCodeProblemDetail, lang: Language): string => {
+    const slugMap: Record<Language, string> = { javascript: 'javascript', python: 'python3' };
+    const snippet = question.codeSnippets?.find(s => s.langSlug === slugMap[lang]);
+    return snippet?.code ?? `// No starter code available for ${lang}`;
+};
+
+const BIG_O_REGEX = /^\s*O\s*\(.+\)\s*$/i;
 
 const Interview: React.FC = () => {
     const location = useLocation();
@@ -61,11 +59,12 @@ const Interview: React.FC = () => {
     const routeState = (location.state ?? {}) as InterviewRouteState;
     const {
         difficulty = 'Medium',
-        language: initialLanguage = 'javascript',
-        previousQuestionId
+        language: initialLanguage = 'javascript'
     } = routeState;
 
-    const [question, setQuestion] = useState<Question | null>(null);
+    const [question, setQuestion] = useState<LeetCodeProblemDetail | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [currentSection, setCurrentSection] = useState<Section>('understand');
     const [language, setLanguage] = useState<Language>(initialLanguage);
     const [code, setCode] = useState('');
@@ -94,16 +93,29 @@ const Interview: React.FC = () => {
     const timer = useTimer(60);
     const speech = useSpeech();
 
-    // Initialize question
+    // Fetch a random problem from the LeetCode API
     useEffect(() => {
-        const q = getRandomQuestion(difficulty, previousQuestionId);
-        setQuestion(q);
-    }, [difficulty, previousQuestionId]);
+        let cancelled = false;
+        setLoading(true);
+        setLoadError(null);
+
+        fetchRandomProblem(difficulty).then(q => {
+            if (cancelled) return;
+            if (q) {
+                setQuestion(q);
+            } else {
+                setLoadError('Failed to load a problem. Please check that the server is running and try again.');
+            }
+            setLoading(false);
+        });
+
+        return () => { cancelled = true; };
+    }, [difficulty]);
 
     // Reset editor starter code when question/language changes
     useEffect(() => {
         if (!question) return;
-        setCode(question.starterCode[language]);
+        setCode(getStarterCode(question, language));
     }, [question, language]);
 
     // Start interview
@@ -122,6 +134,13 @@ const Interview: React.FC = () => {
         setLanguage(newLang);
     };
 
+    // Build test cases from the LeetCode API data
+    const testCases = React.useMemo(() => {
+        if (!question) return [];
+        const inputs = question.exampleTestcaseList ?? (question.sampleTestCase ? [question.sampleTestCase] : []);
+        return inputs.map(input => ({ input, expectedOutput: '' }));
+    }, [question]);
+
     // Run tests
     const handleRunTests = () => {
         if (!question) return;
@@ -129,10 +148,13 @@ const Interview: React.FC = () => {
         let results: any[] = [];
         let allPassed = false;
 
+        const starterCode = getStarterCode(question, language);
+
         if (language === 'javascript') {
             try {
                 // Determine function name from starter code
-                const functionMatch = question.starterCode.javascript.match(/function\s+([a-zA-Z0-9_]+)/);
+                const functionMatch = starterCode.match(/function\s+([a-zA-Z0-9_]+)/) ||
+                    starterCode.match(/var\s+([a-zA-Z0-9_]+)\s*=/);
                 const functionName = functionMatch ? functionMatch[1] : '';
 
                 // Create a runner that returns the user's function
@@ -145,9 +167,8 @@ const Interview: React.FC = () => {
                     throw new Error(`Function ${functionName} is not defined`);
                 }
 
-                results = question.testCases.map((tc) => {
+                results = testCases.map((tc) => {
                     try {
-                        // Parse input as a JSON array of arguments
                         let args: any[] = [];
                         try {
                             args = JSON.parse("[" + tc.input + "]");
@@ -156,22 +177,17 @@ const Interview: React.FC = () => {
                         }
 
                         const actual = runner(...args);
-                        const expected = JSON.parse(tc.expectedOutput);
-
-                        // Deep comparison for arrays/objects
-                        const passed = JSON.stringify(actual) === JSON.stringify(expected);
-
                         return {
-                            passed,
+                            passed: actual !== undefined && actual !== null,
                             input: tc.input,
-                            expected: tc.expectedOutput,
+                            expected: 'N/A (manual check)',
                             actual: JSON.stringify(actual)
                         };
                     } catch (e) {
                         return {
                             passed: false,
                             input: tc.input,
-                            expected: tc.expectedOutput,
+                            expected: 'N/A',
                             actual: `Error: ${(e as Error).message}`
                         };
                     }
@@ -179,47 +195,42 @@ const Interview: React.FC = () => {
             } catch (e) {
                 setTestFeedback(`Runtime Error: ${(e as Error).message}`);
                 speech.speak(`There was a runtime error in your code: ${(e as Error).message}`);
-                setTestResults(question.testCases.map(tc => ({
+                setTestResults(testCases.map(tc => ({
                     passed: false,
                     input: tc.input,
-                    expected: tc.expectedOutput,
+                    expected: 'N/A',
                     actual: 'Compilation/Runtime Error'
                 })));
                 return;
             }
         } else {
-            // Robust Deterministic Mock for Python (Semantic check)
+            // Python: semantic check (can't actually run Python in browser)
+            const pythonStarter = getStarterCode(question, 'python');
             const hasImplementation = !code.includes('pass') &&
-                code.length > (question.starterCode.python.length + 10);
+                code.length > (pythonStarter.length + 10);
 
-            // Check for requirement-specific keywords
-            const keywords = question.expectedApproach.toLowerCase().split(' ');
-            const foundKeywords = keywords.filter(k => k.length > 4 && code.toLowerCase().includes(k)).length;
-            const semanticScore = foundKeywords / (keywords.length * 0.5);
-
-            results = question.testCases.map((tc, index) => {
-                // Deterministically pass/fail based on semantic completeness
-                const passed = hasImplementation && (index < 2 || semanticScore > 0.6);
+            results = testCases.map((tc, index) => {
+                const passed = hasImplementation && index < 2;
                 return {
                     passed,
                     input: tc.input,
-                    expected: tc.expectedOutput,
-                    actual: passed ? tc.expectedOutput : 'Incorrect Output'
+                    expected: 'N/A (manual check)',
+                    actual: passed ? 'Looks implemented' : 'Incomplete'
                 };
             });
         }
 
         setTestResults(results);
-        allPassed = results.every(r => r.passed);
+        allPassed = results.length > 0 && results.every(r => r.passed);
         setAllTestsPassed(allPassed);
 
         if (allPassed) {
-            const feedback = "Excellent! All test cases passed. Your solution seems robust. You can now submit your interview.";
+            const feedback = "Your code ran without errors on all test inputs. You can now submit your interview.";
             setTestFeedback(feedback);
             speech.speak(feedback);
         } else {
             const hint = question.hints?.[0] || "Try to re-examine your logic for the failing test case.";
-            const feedback = `One or more test cases failed. Hint: ${hint}`;
+            const feedback = `One or more test cases had issues. Hint: ${hint}`;
             setTestFeedback(feedback);
             speech.speak(feedback);
         }
@@ -232,7 +243,7 @@ const Interview: React.FC = () => {
         timer.pause();
 
         const passedTests = testResults.filter(r => r.passed).length;
-        const totalTests = testResults.length || question.testCases.length;
+        const totalTests = testResults.length || testCases.length;
 
         const scoringInput: ScoringInput = {
             askedClarifyingQuestions: askedClarifying,
@@ -260,40 +271,31 @@ const Interview: React.FC = () => {
         navigate('/results', {
             state: {
                 scoreResult,
-                problemId: question.id,
+                problemId: question.questionId,
                 problemTitle: question.title,
                 difficulty: question.difficulty,
                 language,
                 passedTests,
-                totalTests
+                totalTests,
+                // Pass question data so Review page can use it without getQuestionById
+                questionContent: question.content,
+                questionHints: question.hints,
+                questionTopicTags: question.topicTags
             }
         });
     };
 
-    // Verify Approach
+    // Verify Approach (lenient – accepts any substantive explanation)
     const handleVerifyApproach = () => {
         if (!question) return;
 
         const transcript = speech.transcript.toLowerCase();
-        const expectedKeywords = question.expectedApproach.toLowerCase().split(' ');
+        const wordCount = transcript.split(/\s+/).filter(Boolean).length;
 
-        let matchedKeywords = 0;
+        // Accept if there's a meaningful explanation (at least 10 words)
+        const isAcceptable = wordCount >= 10;
 
-        // Check keywords from expected approach
-        const importantKeywords = expectedKeywords.filter(k => k.length > 3);
-        importantKeywords.forEach(word => {
-            if (transcript.includes(word)) matchedKeywords++;
-        });
-
-        // Also check and accept category keywords (hidden from user)
-        const categoryKeywords = question.category.toLowerCase().split(/[ &/,]+/).filter(k => k.length > 3);
-        categoryKeywords.forEach(word => {
-            if (transcript.includes(word)) matchedKeywords++;
-        });
-
-        const isCorrect = matchedKeywords >= Math.min(3, importantKeywords.length);
-
-        if (isCorrect) {
+        if (isAcceptable) {
             setExplainedApproach(true);
             setApproachFeedback("That's a solid approach! Now, let's discuss the Big-O complexity.");
             speech.speak("That's a solid approach! Now, let's discuss the Big-O complexity.");
@@ -303,39 +305,39 @@ const Interview: React.FC = () => {
             setFailedApproaches(newFailedCount);
 
             if (newFailedCount >= 3) {
-                setApproachFeedback("I'm sorry,แต่ we've tried a few approaches and haven't quite hit the target. I suggest you prepare well and try again later. The interview is now closed.");
+                setApproachFeedback("I'm sorry, we've tried a few approaches and haven't quite hit the target. I suggest you prepare well and try again later. The interview is now closed.");
                 speech.speak("I'm sorry, but we've tried a few approaches and haven't quite hit the target. I suggest you prepare well and try again later. The interview is now closed.");
                 setInterviewEnded(true);
                 timer.pause();
             } else {
-                setApproachFeedback(`That doesn't seem quite right. Can you think of a more optimal way? You have ${3 - newFailedCount} attempts remaining.`);
-                speech.speak(`That doesn't seem quite right. Can you think of a more optimal way? You have ${3 - newFailedCount} attempts remaining.`);
+                setApproachFeedback(`Please provide a more detailed explanation of your approach. You have ${3 - newFailedCount} attempts remaining.`);
+                speech.speak(`Please provide a more detailed explanation of your approach. You have ${3 - newFailedCount} attempts remaining.`);
             }
         }
     };
 
-    // Verify Complexity
+    // Verify Complexity (lenient – accepts any valid Big-O notation)
     const handleVerifyComplexity = () => {
         if (!question) return;
 
         if (complexityStage === 'time') {
-            const isCorrect = timeComplexityInput.toLowerCase().replace(/\s/g, '').includes(question.timeComplexity.toLowerCase().replace(/\s/g, ''));
-            if (isCorrect) {
+            const isValid = BIG_O_REGEX.test(timeComplexityInput.trim());
+            if (isValid) {
                 setComplexityStage('space');
-                speech.speak("Correct! Now, what is the space complexity?");
+                speech.speak("Noted! Now, what is the space complexity?");
             } else {
-                speech.speak("Not quite. Think about how many times we iterate through the input.");
+                speech.speak("Please provide a valid Big-O notation, for example O(n) or O(n log n).");
             }
         } else {
-            const isCorrect = spaceComplexityInput.toLowerCase().replace(/\s/g, '').includes(question.spaceComplexity.toLowerCase().replace(/\s/g, ''));
-            if (isCorrect) {
+            const isValid = BIG_O_REGEX.test(spaceComplexityInput.trim());
+            if (isValid) {
                 setComplexityStage('done');
                 setDiscussedComplexity(true);
                 setIsEditorDisabled(false);
-                speech.speak("Excellent. You've met the criteria. You can now proceed to implement the solution. The editor is now enabled.");
+                speech.speak("Excellent. You've discussed the complexity. You can now proceed to implement the solution. The editor is now enabled.");
                 setTimeout(() => setCurrentSection('code'), 3000);
             } else {
-                speech.speak("Not quite. Consider any extra data structures you might be using.");
+                speech.speak("Please provide a valid Big-O notation, for example O(1) or O(n).");
             }
         }
     };
@@ -370,10 +372,30 @@ const Interview: React.FC = () => {
         }
     };
 
-    if (!question) {
+    if (loading) {
         return (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
-                <div className="animate-pulse" style={{ fontSize: '24px' }}>Loading question...</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: '24px' }}>
+                <div className="spinner"></div>
+                <div style={{ fontSize: '18px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>Preparing Interview</span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Fetching a random {difficulty} problem from LeetCode...</span>
+                </div>
+            </div>
+        );
+    }
+
+    if (loadError || !question) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ fontSize: '48px' }}>⚠️</div>
+                <h2 style={{ marginBottom: '8px' }}>Failed to Load Problem</h2>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', maxWidth: '500px', textAlign: 'center' }}>
+                    {loadError || 'Could not fetch a problem. Please ensure the backend server is running.'}
+                </p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                    <button className="btn btn-primary" onClick={() => window.location.reload()}>🔄 Retry</button>
+                    <button className="btn btn-secondary" onClick={() => navigate('/')}>← Go Home</button>
+                </div>
             </div>
         );
     }
@@ -492,29 +514,7 @@ const Interview: React.FC = () => {
                                         Read the problem carefully. Ask clarifying questions and identify edge cases.
                                     </p>
 
-                                    <div className="question-description" dangerouslySetInnerHTML={{ __html: question.description }} />
-
-                                    {question.examples.map((example, index) => (
-                                        <div key={index} className="example-block">
-                                            <div className="example-title">Example {index + 1}</div>
-                                            <div className="example-content">
-                                                <div><strong>Input:</strong> {example.input}</div>
-                                                <div><strong>Output:</strong> {example.output}</div>
-                                                {example.explanation && (
-                                                    <div><strong>Explanation:</strong> {example.explanation}</div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))}
-
-                                    <div className="constraints">
-                                        <div className="constraints-title">Constraints:</div>
-                                        <ul>
-                                            {question.constraints.map((c, i) => (
-                                                <li key={i}>{c}</li>
-                                            ))}
-                                        </ul>
-                                    </div>
+                                    <div className="question-description" dangerouslySetInnerHTML={{ __html: question.content ?? '' }} />
 
                                     <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -692,17 +692,7 @@ const Interview: React.FC = () => {
                                         {currentSection === 'code' ? '💻 Step 3: Write Your Code' : '🧪 Step 4: Test Your Solution'}
                                     </h3>
 
-                                    <div className="question-description" dangerouslySetInnerHTML={{ __html: question.description }} />
-
-                                    {question.examples.slice(0, 1).map((example, index) => (
-                                        <div key={index} className="example-block">
-                                            <div className="example-title">Example</div>
-                                            <div className="example-content">
-                                                <div><strong>Input:</strong> {example.input}</div>
-                                                <div><strong>Output:</strong> {example.output}</div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                    <div className="question-description" dangerouslySetInnerHTML={{ __html: question.content ?? '' }} />
                                 </div>
                             )}
                         </div>
@@ -785,7 +775,7 @@ const Interview: React.FC = () => {
                                     </div>
                                 )}
                                 {testResults.length === 0 ? (
-                                    question.testCases.slice(0, 3).map((tc, index) => (
+                                    testCases.slice(0, 3).map((tc, index) => (
                                         <div key={index} className="test-case">
                                             <div className="test-case-header">
                                                 <span className="test-case-name">
@@ -795,7 +785,6 @@ const Interview: React.FC = () => {
                                             </div>
                                             <div className="test-case-body">
                                                 <span>Input: </span>{tc.input}<br />
-                                                <span>Expected: </span>{tc.expectedOutput}
                                             </div>
                                         </div>
                                     ))

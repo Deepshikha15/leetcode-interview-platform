@@ -4,7 +4,6 @@ import Home from './pages/Home';
 import Interview from './pages/Interview';
 import Results from './pages/Results';
 import Review from './pages/Review';
-import Backlog from './pages/Backlog';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
@@ -67,14 +66,6 @@ const App: React.FC = () => {
                 element={(
                     <ProtectedRoute>
                         <Review />
-                    </ProtectedRoute>
-                )}
-            />
-            <Route
-                path="/backlog"
-                element={(
-                    <ProtectedRoute>
-                        <Backlog />
                     </ProtectedRoute>
                 )}
             />

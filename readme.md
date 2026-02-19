@@ -19,6 +19,9 @@ Set these server environment variables:
 - Optional: `SUPABASE_HEADCOUNT_TABLE=signup_headcount`
 - Optional: `SUPABASE_LOGIN_EVENTS_TABLE=login_events`
 - Optional local bind host: `HOST=127.0.0.1` (set `HOST=0.0.0.0` for container/public network binding)
+- Optional env file override: `ENV_FILE_PATH=/absolute/path/to/.env`
+
+The server auto-loads `.env` from project root (or `ENV_FILE_PATH`) before initializing DB connections.
 
 Create the table in Supabase SQL editor:
 
