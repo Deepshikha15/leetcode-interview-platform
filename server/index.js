@@ -46,8 +46,12 @@ const loadEnvFromFile = () => {
 loadEnvFromFile();
 
 const PORT = Number(process.env.PORT ?? 3001);
-const HOST = process.env.HOST?.trim() || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+const HOST = process.env.HOST?.trim() || '0.0.0.0';
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
+
+if (!existsSync(DIST_DIR)) {
+    console.warn(`Warning: Distribution directory NOT found at ${DIST_DIR}. Frontend may not serve correctly.`);
+}
 
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -301,18 +305,20 @@ const serveFrontend = async (req, res, pathname) => {
 
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(fileBuffer);
-    } catch {
+    } catch (err) {
         if (pathname !== '/index.html') {
             try {
                 const fallback = await fs.readFile(path.join(DIST_DIR, 'index.html'));
+                console.log(`Fallback: Serving index.html for unknown path "${pathname}"`);
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
                 res.end(fallback);
                 return;
-            } catch {
-                // continue to 404 below
+            } catch (fallbackErr) {
+                console.error(`Double Fault: Failed to serve index.html fallback for "${pathname}":`, fallbackErr.message);
             }
         }
 
+        console.error(`Not Found: ${pathname} (mapped to ${getSafeAssetPath(pathname)})`);
         sendText(
             res,
             404,
