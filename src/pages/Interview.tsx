@@ -182,7 +182,7 @@ const Interview: React.FC = () => {
                         const inputStr = tc.input.trim();
 
                         if (inputStr.includes('\n')) {
-                            args = inputStr.split('\n').map(line => {
+                            args = inputStr.split('\n').map((line: string) => {
                                 try { return JSON.parse(line); }
                                 catch { return line; }
                             });
