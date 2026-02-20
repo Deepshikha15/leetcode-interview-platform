@@ -30,6 +30,44 @@ const PROBLEMS_TO_SEED = [
     'longest-substring-without-repeating-characters'
 ];
 
+const PROBLEM_METADATA = {
+    'two-sum': {
+        brute_time: 'O(n^2)', brute_space: 'O(1)',
+        opt_time: 'O(n)', opt_space: 'O(n)',
+        test_cases: [
+            { input: '[2,7,11,15]\n9', expected: '[0,1]' },
+            { input: '[3,2,4]\n6', expected: '[1,2]' },
+            { input: '[3,3]\n6', expected: '[0,1]' }
+        ]
+    },
+    'remove-duplicates-from-sorted-array': {
+        brute_time: 'O(n)', brute_space: 'O(1)',
+        opt_time: 'O(n)', opt_space: 'O(1)',
+        test_cases: [
+            { input: '[1,1,2]', expected: '2' },
+            { input: '[0,0,1,1,1,2,2,3,3,4]', expected: '5' }
+        ]
+    },
+    'valid-parentheses': {
+        brute_time: 'O(n)', brute_space: 'O(n)',
+        opt_time: 'O(n)', opt_space: 'O(n)',
+        test_cases: [
+            { input: '"()"', expected: 'true' },
+            { input: '"()[]{}"', expected: 'true' },
+            { input: '"(]"', expected: 'false' }
+        ]
+    },
+    'palindrome-number': {
+        brute_time: 'O(n)', brute_space: 'O(n)',
+        opt_time: 'O(log n)', opt_space: 'O(1)',
+        test_cases: [
+            { input: '121', expected: 'true' },
+            { input: '-121', expected: 'false' },
+            { input: '10', expected: 'false' }
+        ]
+    }
+};
+
 async function seed() {
     console.log('--- Starting LeetCode Problem Seeding ---');
 
@@ -42,6 +80,12 @@ async function seed() {
                 console.warn(`Could not find problem: ${slug}`);
                 continue;
             }
+
+            const meta = PROBLEM_METADATA[slug] || {
+                brute_time: 'O(n^2)', brute_space: 'O(1)',
+                opt_time: 'O(n)', opt_space: 'O(n)',
+                test_cases: []
+            };
 
             console.log(`Saving ${slug} to Supabase...`);
             const { error } = await supabase
@@ -56,6 +100,11 @@ async function seed() {
                     sample_test_case: problem.sampleTestCase,
                     hints: problem.hints || [],
                     example_testcase_list: problem.exampleTestcaseList || [],
+                    brute_time_complexity: meta.brute_time,
+                    brute_space_complexity: meta.brute_space,
+                    optimized_time_complexity: meta.opt_time,
+                    optimized_space_complexity: meta.opt_space,
+                    test_cases: meta.test_cases,
                     last_synced_at: new Date().toISOString()
                 }, { onConflict: 'title_slug' });
 

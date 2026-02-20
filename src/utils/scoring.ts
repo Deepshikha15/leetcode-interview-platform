@@ -40,6 +40,9 @@ export interface ScoringInput {
     structuredThinking: boolean;
     interactionPoints: number; // points for explaining while coding
 
+    // Solution Type
+    solutionType: 'brute' | 'optimized' | null;
+
     // Time
     timeUsedSeconds: number;
     totalTimeSeconds: number;
@@ -107,7 +110,7 @@ export function calculateScore(input: ScoringInput): ScoreResult {
 
     feedback.push({
         section: 'Approach Explanation',
-        score: approachExplanation,
+        score: Math.min(approachExplanation, 25),
         maxScore: 25,
         comments: aeComments
     });

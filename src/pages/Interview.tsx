@@ -89,6 +89,7 @@ const Interview: React.FC = () => {
     const [interviewEnded, setInterviewEnded] = useState(false);
     const [testFeedback, setTestFeedback] = useState<string>('');
     const [allTestsPassed, setAllTestsPassed] = useState(false);
+    const [solutionType, setSolutionType] = useState<'brute' | 'optimized' | null>('optimized');
 
     const timer = useTimer(60);
     const speech = useSpeech();
@@ -152,10 +153,18 @@ const Interview: React.FC = () => {
 
         if (language === 'javascript') {
             try {
+                // Use ground-truth test cases if available, otherwise fallback to examples
+                const testCases = (question.test_cases && (question.test_cases as any[]).length > 0)
+                    ? (question.test_cases as any[])
+                    : (question.exampleTestcaseList || []).map(input => ({
+                        input,
+                        expected: null // No ground truth
+                    }));
+
                 // Determine function name from starter code
                 const functionMatch = starterCode.match(/function\s+([a-zA-Z0-9_]+)/) ||
                     starterCode.match(/var\s+([a-zA-Z0-9_]+)\s*=/);
-                const functionName = functionMatch ? functionMatch[1] : '';
+                const functionName = functionMatch ? functionMatch[1] : 'solution';
 
                 // Create a runner that returns the user's function
                 const runner = new Function(`
@@ -164,58 +173,102 @@ const Interview: React.FC = () => {
                 `)();
 
                 if (typeof runner !== 'function') {
-                    throw new Error(`Function ${functionName} is not defined`);
+                    throw new Error(`Function ${functionName} is not defined. Check your code structure.`);
                 }
 
                 results = testCases.map((tc) => {
                     try {
                         let args: any[] = [];
-                        try {
-                            args = JSON.parse("[" + tc.input + "]");
-                        } catch {
-                            args = [tc.input];
+                        const inputStr = tc.input.trim();
+
+                        if (inputStr.includes('\n')) {
+                            args = inputStr.split('\n').map(line => {
+                                try { return JSON.parse(line); }
+                                catch { return line; }
+                            });
+                        } else {
+                            try {
+                                if (inputStr.startsWith('[') && inputStr.endsWith(']')) {
+                                    args = [JSON.parse(inputStr)];
+                                } else {
+                                    args = JSON.parse("[" + inputStr + "]");
+                                }
+                            } catch {
+                                args = [inputStr];
+                            }
                         }
 
-                        const actual = runner(...args);
+                        const argsForCall = JSON.parse(JSON.stringify(args));
+                        const actual = runner(...argsForCall);
+
+                        let passed = actual !== undefined && actual !== null;
+                        let expectedStr = tc.expected || 'Valid result';
+
+                        if (tc.expected !== null) {
+                            const normalize = (val: any) => {
+                                if (val === null || val === undefined) return '';
+                                if (typeof val === 'boolean') return String(val);
+                                if (typeof val === 'number') return String(val);
+                                if (Array.isArray(val)) return JSON.stringify(val);
+                                return String(val).trim();
+                            };
+
+                            const actualNorm = normalize(actual);
+                            const expectedNorm = normalize(tc.expected);
+
+                            if (String(tc.expected).startsWith('[') || String(tc.expected).startsWith('{')) {
+                                try {
+                                    passed = JSON.stringify(actual) === JSON.stringify(JSON.parse(String(tc.expected)));
+                                } catch {
+                                    passed = actualNorm === expectedNorm;
+                                }
+                            } else {
+                                passed = actualNorm === expectedNorm;
+                            }
+                        }
+
+                        // Special handling for Remove Duplicates (in-place) as backup or if no expected
+                        if (args.length === 1 && Array.isArray(args[0]) && typeof actual === 'number') {
+                            const modifiedArray = argsForCall[0].slice(0, actual);
+                            const isSorted = modifiedArray.every((val: any, idx: number) => idx === 0 || val >= modifiedArray[idx - 1]);
+                            passed = passed && isSorted;
+                            if (tc.expected === null) expectedStr = `Length ${actual} & Sorted`;
+                        }
+
                         return {
-                            passed: actual !== undefined && actual !== null,
+                            passed,
                             input: tc.input,
-                            expected: 'N/A (manual check)',
+                            expected: expectedStr,
                             actual: JSON.stringify(actual)
                         };
                     } catch (e) {
                         return {
                             passed: false,
                             input: tc.input,
-                            expected: 'N/A',
-                            actual: `Error: ${(e as Error).message}`
+                            expected: tc.expected || 'N/A',
+                            actual: `Runtime Error: ${(e as Error).message}`
                         };
                     }
                 });
             } catch (e) {
-                setTestFeedback(`Runtime Error: ${(e as Error).message}`);
-                speech.speak(`There was a runtime error in your code: ${(e as Error).message}`);
-                setTestResults(testCases.map(tc => ({
-                    passed: false,
-                    input: tc.input,
-                    expected: 'N/A',
-                    actual: 'Compilation/Runtime Error'
-                })));
+                setTestFeedback(`Initialization Error: ${(e as Error).message}`);
+                speech.speak(`There was an error preparing the tests: ${(e as Error).message}`);
                 return;
             }
         } else {
-            // Python: semantic check (can't actually run Python in browser)
+            // Python: semantic check
             const pythonStarter = getStarterCode(question, 'python');
-            const hasImplementation = !code.includes('pass') &&
-                code.length > (pythonStarter.length + 10);
+            const testSource = (question.test_cases && (question.test_cases as any[]).length > 0)
+                ? (question.test_cases as any[])
+                : (question.exampleTestcaseList || []).map(input => ({ input }));
 
-            results = testCases.map((tc, index) => {
-                const passed = hasImplementation && index < 2;
+            results = testSource.map((tc, index) => {
+                const hasImplementation = !code.includes('pass') && code.length > (pythonStarter.length + 10);
                 return {
-                    passed,
-                    input: tc.input,
-                    expected: 'N/A (manual check)',
-                    actual: passed ? 'Looks implemented' : 'Incomplete'
+                    passed: hasImplementation && index < 1,
+                    input: tc.input || tc,
+                    expected: 'N/A (Manual check)',
+                    actual: hasImplementation ? 'Looks implemented' : 'Incomplete'
                 };
             });
         }
@@ -225,14 +278,13 @@ const Interview: React.FC = () => {
         setAllTestsPassed(allPassed);
 
         if (allPassed) {
-            const feedback = "Your code ran without errors on all test inputs. You can now submit your interview.";
-            setTestFeedback(feedback);
-            speech.speak(feedback);
+            setTestFeedback("All tests passed! You can now submit your solution.");
+            speech.speak("All tests passed! You can now submit.");
         } else {
-            const hint = question.hints?.[0] || "Try to re-examine your logic for the failing test case.";
-            const feedback = `One or more test cases had issues. Hint: ${hint}`;
-            setTestFeedback(feedback);
-            speech.speak(feedback);
+            const hint = question.hints?.[0] || "Check your logic and return type.";
+            setTestFeedback(results.length === 0 ? "No tests found." : `Some tests failed. Hint: ${hint}`);
+            speech.speak("One or more tests failed. Check the results table below.");
+            if (results.length === 0) setAllTestsPassed(true);
         }
     };
 
@@ -262,6 +314,7 @@ const Interview: React.FC = () => {
             verbalExplanationLength: speech.transcript.split(' ').length,
             structuredThinking: speech.transcript.length > 100,
             interactionPoints: interactionPoints,
+            solutionType: solutionType,
             timeUsedSeconds: 3600 - timer.timeRemaining,
             totalTimeSeconds: 3600
         };
@@ -297,8 +350,8 @@ const Interview: React.FC = () => {
 
         if (isAcceptable) {
             setExplainedApproach(true);
-            setApproachFeedback("That's a solid approach! Now, let's discuss the Big-O complexity.");
-            speech.speak("That's a solid approach! Now, let's discuss the Big-O complexity.");
+            setApproachFeedback("Excellent approach! Now, let's discuss the Optimized Big-O complexity for this algorithm.");
+            speech.speak("Excellent approach! Now, let's discuss the Optimized Big-O complexity for this algorithm.");
             setTimeout(() => setCurrentSection('complexity'), 2000);
         } else {
             const newFailedCount = failedApproaches + 1;
@@ -316,25 +369,40 @@ const Interview: React.FC = () => {
         }
     };
 
-    // Verify Complexity (lenient – accepts any valid Big-O notation)
     const handleVerifyComplexity = () => {
         if (!question) return;
 
+        // Big-O normalization for loose comparison
+        const normalizeBigO = (s: string) => s.replace(/\s+/g, '').toLowerCase().replace(/[\(\)]/g, '');
+
         if (complexityStage === 'time') {
-            const isValid = BIG_O_REGEX.test(timeComplexityInput.trim());
-            if (isValid) {
+            const userInput = normalizeBigO(timeComplexityInput);
+            const expected = normalizeBigO(question.optimized_time_complexity || 'O(n)'); // Default O(n) for many Easy/Medium
+
+            if (userInput === expected || BIG_O_REGEX.test(timeComplexityInput.trim())) {
+                // If we have strict metadata, we should really check it
+                if (question.optimized_time_complexity && userInput !== expected) {
+                    speech.speak(`Not quite. Try thinking if you can achieve a better time complexity than ${timeComplexityInput}.`);
+                    return;
+                }
                 setComplexityStage('space');
-                speech.speak("Noted! Now, what is the space complexity?");
+                speech.speak("Correct! Now, what is the space complexity?");
             } else {
-                speech.speak("Please provide a valid Big-O notation, for example O(n) or O(n log n).");
+                speech.speak("Please provide a valid Big-O notation, for example O(n) or O(log n).");
             }
         } else {
-            const isValid = BIG_O_REGEX.test(spaceComplexityInput.trim());
-            if (isValid) {
+            const userInput = normalizeBigO(spaceComplexityInput);
+            const expected = normalizeBigO(question.optimized_space_complexity || 'O(1)');
+
+            if (userInput === expected || BIG_O_REGEX.test(spaceComplexityInput.trim())) {
+                if (question.optimized_space_complexity && userInput !== expected) {
+                    speech.speak(`Almost there, but is the space complexity really ${spaceComplexityInput}? Hint: constant space is usually O(1).`);
+                    return;
+                }
                 setComplexityStage('done');
                 setDiscussedComplexity(true);
                 setIsEditorDisabled(false);
-                speech.speak("Excellent. You've discussed the complexity. You can now proceed to implement the solution. The editor is now enabled.");
+                speech.speak("Spot on. You've identified the optimized complexity. You can now proceed to write your code. The editor is enabled.");
                 setTimeout(() => setCurrentSection('code'), 3000);
             } else {
                 speech.speak("Please provide a valid Big-O notation, for example O(1) or O(n).");
@@ -554,8 +622,8 @@ const Interview: React.FC = () => {
                                     </h3>
                                     <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
                                         {complexityStage === 'time'
-                                            ? "What is the Time Complexity of your proposed solution?"
-                                            : "And what is the Space Complexity?"}
+                                            ? `What is the Time Complexity of your proposed ${solutionType === 'brute' ? 'Brute Force' : 'Optimized'} solution?`
+                                            : `And what is the Space Complexity of your ${solutionType === 'brute' ? 'Brute Force' : 'Optimized'} solution?`}
                                     </p>
 
                                     <div className="complexity-input-section" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

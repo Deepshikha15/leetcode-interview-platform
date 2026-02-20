@@ -95,14 +95,6 @@ const Results: React.FC = () => {
         });
     };
 
-    const handleTryAgain = () => {
-        navigate('/interview', {
-            state: {
-                difficulty: routeState.difficulty ?? 'Medium',
-                language: routeState.language ?? 'javascript'
-            }
-        });
-    };
 
 
 
@@ -266,9 +258,6 @@ const Results: React.FC = () => {
                 </button>
                 <button className="btn btn-secondary btn-large" onClick={() => navigate('/')}>
                     🏠 Back Home
-                </button>
-                <button className="btn btn-primary btn-large" onClick={handleTryAgain}>
-                    🔄 Try Again
                 </button>
             </div>
         </div >

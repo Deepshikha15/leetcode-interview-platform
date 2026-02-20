@@ -53,6 +53,11 @@ export interface LeetCodeProblemDetail {
     sampleTestCase: string;
     hints: string[];
     exampleTestcaseList: string[];
+    brute_time_complexity?: string;
+    brute_space_complexity?: string;
+    optimized_time_complexity?: string;
+    optimized_space_complexity?: string;
+    test_cases?: { input: string; expected: string }[];
 }
 
 export interface LeetCodeDailyChallenge {

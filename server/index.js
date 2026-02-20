@@ -166,6 +166,11 @@ const syncToCache = async (problem) => {
                 sample_test_case: problem.sampleTestCase,
                 hints: problem.hints || [],
                 example_testcase_list: problem.exampleTestcaseList || [],
+                brute_time_complexity: problem.brute_time_complexity,
+                brute_space_complexity: problem.brute_space_complexity,
+                optimized_time_complexity: problem.optimized_time_complexity,
+                optimized_space_complexity: problem.optimized_space_complexity,
+                test_cases: problem.test_cases || [],
                 last_synced_at: new Date().toISOString()
             }, { onConflict: 'title_slug' });
 
@@ -262,7 +267,12 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                         codeSnippets: cached.code_snippets,
                         sampleTestCase: cached.sample_test_case,
                         hints: cached.hints,
-                        exampleTestcaseList: cached.example_testcase_list
+                        exampleTestcaseList: cached.example_testcase_list,
+                        brute_time_complexity: cached.brute_time_complexity,
+                        brute_space_complexity: cached.brute_space_complexity,
+                        optimized_time_complexity: cached.optimized_time_complexity,
+                        optimized_space_complexity: cached.optimized_space_complexity,
+                        test_cases: cached.test_cases
                     });
                     return true;
                 }
@@ -337,7 +347,12 @@ const handleLeetcodeApi = async (req, res, rawPathname) => {
                         codeSnippets: picked.code_snippets,
                         sampleTestCase: picked.sample_test_case,
                         hints: picked.hints,
-                        exampleTestcaseList: picked.example_testcase_list
+                        exampleTestcaseList: picked.example_testcase_list,
+                        brute_time_complexity: picked.brute_time_complexity,
+                        brute_space_complexity: picked.brute_space_complexity,
+                        optimized_time_complexity: picked.optimized_time_complexity,
+                        optimized_space_complexity: picked.optimized_space_complexity,
+                        test_cases: picked.test_cases
                     });
                     return true;
                 }
